@@ -1,0 +1,9 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">账户与密钥</p><h1>连接你的设备。</h1><p class="muted">每台设备在客户端中填写同一个账户密钥，数据自动归入你的账户。</p></div></div>
+<div class="two-columns"><section class="panel"><h2>设备上传密钥</h2>
+{% if upload_token %}<div class="notice">密钥已生成，仅在本次页面显示。请复制到 Windows 客户端的「上传密钥」中。</div><textarea readonly aria-label="上传密钥" rows="3">{{ upload_token }}</textarea>{% else %}<p class="muted">{% if user.upload_hash %}已有密钥。服务端仅保存密钥摘要，无法再次查看原文。{% else %}尚未生成密钥，请点击下方按钮。{% endif %}</p>{% endif %}
+<form action="/settings/token" method="post"><input type="hidden" name="csrf" value="{{ user.csrf }}"><button class="primary">生成 / 重置上传密钥</button></form><p class="muted">重置会立即使旧密钥失效。需要更新你所有设备的客户端配置。</p>
+<hr><h3>客户端填写方式</h3><p>服务器地址：部署服务器的 IP 或域名<br>端口：默认 8080，可在部署时调整<br>协议：内网可用 HTTP，公网使用 HTTPS<br>设备名称：用容易辨认的名字</p></section>
+<section class="panel"><h2>修改登录密码</h2><form action="/settings/password" method="post"><input type="hidden" name="csrf" value="{{ user.csrf }}"><label>原密码<input name="old_password" type="password" autocomplete="current-password" required maxlength="256"></label><label>新密码<input name="new_password" type="password" autocomplete="new-password" required minlength="12" maxlength="256"></label><button class="primary">保存新密码</button></form><p class="muted">密码至少12个字符。修改后，所有网页会话会退出登录，设备上传密钥继续有效。</p></section></div>
+{% endblock %}

@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}专注记录 · Focus Ledger{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+<header class="topbar"><a class="brand" href="/">◈ <span>专注记录<small>FOCUS LEDGER</small></span></a>
+{% if user %}<nav><a href="/">设备概览</a><a href="/settings">账户与密钥</a>{% if user.is_admin %}<a href="/admin/users">用户管理</a>{% endif %}</nav>
+<form action="/logout" method="post" class="inline"><input type="hidden" name="csrf" value="{{ user.csrf }}"><span class="muted">{{ user.username }}</span> <button class="ghost">退出</button></form>{% endif %}</header>
+<main>{% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}{% block content %}{% endblock %}</main>
+<footer>仅记录前台应用与使用时长 · 最多保留 {{ retention }} 天 · 所有时间以 UTC 展示</footer>
+</body></html>

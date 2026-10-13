@@ -1,0 +1,9 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="login-layout"><div><p class="eyebrow">让设备使用有迹可循</p><h1>你的时间，<br>清晰呈现。</h1><p class="muted intro">查看自己的设备与应用使用记录。<br>账户由管理员创建，设备通过专属密钥接入。</p><div class="pills"><span>多设备</span><span>账户隔离</span><span>365 天内的记录</span></div></div>
+<section class="panel login"><h2>登录账户</h2><p class="muted">使用管理员为你创建的账户。</p>
+<form action="/login" method="post"><input type="hidden" name="csrf" value="{{ nonce }}">
+<label>用户名<input name="username" autocomplete="username" required maxlength="40" autofocus></label>
+<label>密码<input type="password" name="password" autocomplete="current-password" required maxlength="256"></label>
+<button class="primary full">登录</button></form></section></section>
+{% endblock %}
