@@ -1,1 +1,1 @@
-d4a80d98dd32539f7c20de2014efb15e0e9f96ce6cb13faa75aca83fae9e0810  FocusLedger-windows-x64.zip
+1989f53d56f172cb07337193c0a8424f9b0aa4519f5ec4c044e6a480c8b41f9d  FocusLedger-windows-x64.zip

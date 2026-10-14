@@ -11,7 +11,9 @@ try {
         & $taskPythonCommand -m pip install -r requirements.txt "pyinstaller==6.22.3"
         if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
     }
-    & $taskPythonCommand -m PyInstaller --noconfirm --clean --onedir --windowed --name FocusLedger --paths . main.py
+    & $taskPythonCommand tools\make_icon.py build\icon\FocusLedger.ico
+    if ($LASTEXITCODE -ne 0) { throw "Icon generation failed" }
+    & $taskPythonCommand -m PyInstaller --noconfirm --clean --onedir --windowed --name FocusLedger --icon build\icon\FocusLedger.ico --paths . main.py
     if ($LASTEXITCODE -ne 0) { throw "Build failed" }
     Write-Host "Ready: $PSScriptRoot\dist\FocusLedger\FocusLedger.exe"
 } finally {

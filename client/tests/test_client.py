@@ -116,6 +116,17 @@ def test_status_events_share_durable_queue_and_batch(tmp_path):
     assert store.recent(first.destination)[0][0] == record
 
 
+def test_day_query_returns_sent_and_pending_records_of_one_connection(tmp_path):
+    store, first = EventStore(tmp_path / "db"), config()
+    other = replace(first, account_id=2)
+    now = time.time()
+    early, sent, pending, outside = event(now - 7200), event(now - 600), status_event(now - 60), event(now - 90000)
+    store.add(first, [pending, sent, early, outside])
+    store.add(other, [event(now - 300)])
+    store.acknowledge(first.destination, [sent["id"]])
+    assert store.between(first.destination, now - 86400, now) == [early, sent, pending]
+
+
 def test_config_aliases_and_power_options_validate():
     first = config(app_aliases={" Chrome.EXE ": "浏览器", r"C:\Program Files\Code\Code.exe": "编辑器"},
                    battery_seconds=60, upload_on_shutdown=True, upload_on_suspend=False)

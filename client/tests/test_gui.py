@@ -79,7 +79,7 @@ def make_window(tmp_path, monkeypatch):
     windows = []
 
     def build(**options):
-        config = Config(host="127.0.0.1", api_key="x"*43, account_id=1, username="alice", **options)
+        config = Config(**{"host": "127.0.0.1", "api_key": "x"*43, "account_id": 1, "username": "alice", **options})
         window = gui.MainWindow(config, tmp_path / "config.json", EventStore(tmp_path / "events.db"))
         window.startup_calls = startup_calls
         windows.append(window)
@@ -252,6 +252,50 @@ def test_alias_suggestions_and_duplicates(make_window):
     window.add_alias("Synthetic.EXE", "重复")
     with pytest.raises(ValueError, match="重复"):
         window.collect_aliases()
+
+
+def test_day_strip_shows_today_with_the_open_segment_live(make_window):
+    _, build = make_window
+    window = build()
+    wall, monotonic = time.time(), time.monotonic()
+    window.tracker = SessionTracker(segment_seconds=120)
+    for offset in range(40, 0, -1):  # one app in the foreground for 40 s, not yet stored
+        window.tracker.observe(APP, wall - offset, monotonic - offset)
+    window.refresh_history()
+    stored = window.day_recorded
+    assert len(window.day.marks) == 1 and window.day.marks[0][1] is True  # the "startup" node, drawn as ▲
+    hours, minutes, seconds = map(int, window.day_total.text().split(":"))
+    assert hours * 3600 + minutes * 60 + seconds == pytest.approx(stored + 40, abs=2)
+    live = [block for block in window.day.blocks() if block[2]]
+    assert len(live) == 1 and live[0][1] == pytest.approx(time.time(), abs=2)
+    window.toggle_collection()  # pausing stores the segment and nothing is live any more
+    assert window.day_recorded == pytest.approx(stored + 40, abs=2)
+    assert not any(live for *_, live in window.day.blocks())
+    assert window.day.describe(window.day.x_at(wall - 20), window.day.SCALE + 5).startswith("Synthetic App")
+
+
+def test_settings_edits_are_flagged_until_saved(make_window):
+    _, build = make_window
+    window = build()
+    assert window.pages.currentIndex() == window.LEDGER and not window.dirty
+    window.interval.setValue(45)
+    assert window.dirty and window.settings_tab.flagged and not window.unsaved.isHidden()
+    window.connection_job(True)
+    assert not window.dirty and not window.settings_tab.flagged and window.unsaved.isHidden()
+
+
+def test_unconfigured_window_opens_settings_and_history_aliases_switch_page(make_window):
+    _, build = make_window
+    window = build(account_id=0, username="")
+    assert window.pages.currentIndex() == window.SETTINGS
+    window.show_page(window.LEDGER)
+    window.store.add(window.config, [{
+        "id": "a", "kind": "app_usage", "app_name": "Synthetic App", "process_name": "synthetic.exe",
+        "started_at": "2026-01-01T00:00:00+00:00", "ended_at": "2026-01-01T00:00:30+00:00", "duration_seconds": 30}])
+    window.refresh_history()
+    window.alias_from_history(0, 0)
+    assert window.pages.currentIndex() == window.SETTINGS
+    assert window.aliases.item(0, 0).text() == "synthetic.exe"
 
 
 def test_system_event_messages_translate():

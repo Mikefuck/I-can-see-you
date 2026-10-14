@@ -74,6 +74,13 @@ class EventStore:
                               (destination,)).fetchall()
         return [(json.loads(row["payload"]), row["sent"]) for row in rows]
 
+    def between(self, destination, start, end):
+        """Records that ended in [start, end), oldest first; the day strip reads today's records with it."""
+        with self.connect() as db:
+            rows = db.execute("SELECT payload FROM events WHERE destination=? AND ended_at>=? AND ended_at<? "
+                              "ORDER BY ended_at", (destination, start, end)).fetchall()
+        return [json.loads(row["payload"]) for row in rows]
+
     def clear_pending(self):
         with self.connect() as db:
             db.execute("DELETE FROM events WHERE sent=0")
