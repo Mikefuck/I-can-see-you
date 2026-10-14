@@ -1,0 +1,31 @@
+{% extends 'base.html' %}
+{% from '_clock.html' import clock %}
+{% block title %}总览 · 专注记录{% endblock %}
+{% block content %}
+<section class="hero" aria-label="此刻">
+  <div class="hero-dial">{{ clock("sbb-hero") }}</div>
+  <div class="hero-time">
+    <p class="hero-date" data-today>今天</p>
+    <p class="hero-clock"><span data-hm>--:--</span><span class="hero-sec" data-ss>--</span></p>
+  </div>
+  <dl class="figures">
+    <div class="figure"><dt>在线设备<small>Online</small></dt><dd><b data-fig="online">–</b><span class="figure-of" data-fig="devices"></span></dd><p data-fig="online-note"></p></div>
+    <div class="figure"><dt>正在使用<small>In use</small></dt><dd><b data-fig="busy">–</b><span class="figure-of">人</span></dd><p data-fig="busy-names"></p></div>
+    <div class="figure"><dt>我的今日<small>My day</small></dt><dd data-fig="mine">–</dd><p data-fig="mine-note"></p></div>
+  </dl>
+</section>
+<section class="board" data-board aria-label="今日时刻表"></section>
+<p class="board-status" data-board-status role="status"></p>
+<ul class="key" aria-label="图例">
+  <li><i class="lamp is-active" aria-hidden="true"></i>使用中</li>
+  <li><i class="lamp is-idle" aria-hidden="true"></i>空闲</li>
+  <li><i class="lamp is-asleep" aria-hidden="true"></i>休眠</li>
+  <li><i class="lamp" aria-hidden="true"></i>关机或离线</li>
+  <li><i class="key-bar" aria-hidden="true"></i>使用的时段</li>
+  <li><i class="key-mark" aria-hidden="true"></i>开机、休眠、关机的时刻</li>
+  <li><i class="key-now" aria-hidden="true"></i>此刻</li>
+</ul>
+{% if not user.shared %}<p class="share-note"><b>你的记录只有你自己能看到。</b><span>公开后，其他成员也能在总览里看到你的设备和正在使用的应用。</span><a href="/settings#sharing">公开设置</a></p>{% endif %}
+<noscript><p class="notice">总览需要启用 JavaScript 才能绘制时刻表。</p></noscript>
+<script type="application/json" id="board-data">{{ board|tojson }}</script>
+{% endblock %}

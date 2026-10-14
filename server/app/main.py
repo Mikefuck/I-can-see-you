@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 import secrets
 import sqlite3
 import time
@@ -9,10 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from .board import MAX_SPAN, board, find_person, person_view
 from .config import Settings
 from .database import Database
 from .models import Batch, DeviceStatusEvent, UsageEvent
@@ -102,8 +106,9 @@ def create_app(settings=None):
     app.add_middleware(BodyLimit)
     app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
     templates = Jinja2Templates(directory=BASE / "templates")
-    templates.env.filters["duration"] = lambda seconds: f"{int(seconds) // 3600}小时 {int(seconds) % 3600 // 60}分 {int(seconds) % 60}秒"
-    templates.env.filters["date"] = lambda stamp: datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    # Pages print UTC; the browser script rewrites every <time> into the viewer's own zone.
+    templates.env.filters["date"] = lambda stamp: datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    templates.env.filters["iso"] = lambda stamp: datetime.fromtimestamp(stamp, timezone.utc).isoformat()
 
     @app.middleware("http")
     async def headers(request, call_next):
@@ -111,9 +116,21 @@ def create_app(settings=None):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
-        response.headers["Cache-Control"] = "no-store"
+        # Pages and data behind a login are never stored; the public styles and script are revalidated (304) instead of re-sent.
+        response.headers["Cache-Control"] = "no-cache" if request.url.path.startswith("/static/") else "no-store"
         response.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'"
         return response
+
+    @app.exception_handler(StarletteHTTPException)
+    async def error_page(request, exc):
+        # Browsers get a page with a way back; devices and scripts keep the JSON body.
+        if request.url.path.startswith("/api/") or "text/html" not in request.headers.get("accept", ""):
+            return await http_exception_handler(request, exc)
+        user = await asyncio.to_thread(session, request)
+        return templates.TemplateResponse(request=request, name="error.html", status_code=exc.status_code,
+            context={"user": user, "retention": settings.retention_days, "status": exc.status_code,
+                     "message": {"Not Found": "没有这个页面", "Method Not Allowed": "这个地址不接受这种请求"}
+                                .get(exc.detail, exc.detail)})
 
     def session(request):
         raw = request.cookies.get(COOKIE, "")
@@ -206,46 +223,64 @@ def create_app(settings=None):
         response.delete_cookie(COOKIE)
         return response
 
-    def usage_summary(user_id, days, device_id=None):
-        cutoff = max(database.cutoff(), time.time() - days * 86400)
-        end = time.time()
-        clause = " AND device_id=?" if device_id else ""
-        with database.connect() as db:
-            apps = db.execute(
-                "SELECT app_name,process_name,SUM(MAX(0,MIN(ended_at,?)-MAX(started_at,?))) AS seconds "
-                "FROM events WHERE user_id=? AND ended_at>? AND started_at<?" + clause +
-                " GROUP BY app_name,process_name ORDER BY seconds DESC LIMIT 100",
-                # SQL uses end, cutoff in aggregate; remaining predicates use cutoff, end.
-                [end, cutoff, user_id, cutoff, end] + ([device_id] if device_id else []),
-            ).fetchall()
-            total = db.execute("SELECT COALESCE(SUM(MAX(0,MIN(ended_at,?)-MAX(started_at,?))),0) "
-                "FROM events WHERE user_id=? AND ended_at>? AND started_at<?" + clause,
-                [end, cutoff, user_id, cutoff, end] + ([device_id] if device_id else [])).fetchone()[0]
-            records = db.execute("SELECT e.*,d.name AS device_name FROM events e JOIN devices d ON d.id=e.device_id "
-                "WHERE e.user_id=? AND e.ended_at>? AND e.started_at<?" +
-                (" AND e.device_id=?" if device_id else "") + " ORDER BY e.ended_at DESC LIMIT 100",
-                [user_id, cutoff, end] + ([device_id] if device_id else [])).fetchall()
-        return apps, records, total
+    def member_rows(db):
+        return db.execute(
+            "SELECT u.id,u.username,u.is_admin,u.enabled,u.shared,u.created_at,COUNT(d.id) AS devices,"
+            "MAX(d.last_seen) AS last_seen FROM users u LEFT JOIN devices d ON d.user_id=u.id AND d.last_seen>? "
+            "GROUP BY u.id ORDER BY u.id", (database.cutoff(),)).fetchall()
 
     @app.get("/")
-    def dashboard(request: Request, days: int = 7, device: str = ""):
+    def board_page(request: Request):
         user = session(request)
         if not user:
             return RedirectResponse("/login", 303)
-        days = min(max(days, 1), settings.retention_days)
         with database.connect() as db:
-            devices = db.execute("SELECT * FROM devices WHERE user_id=? AND last_seen>? ORDER BY last_seen DESC",
+            data = board(db, user, time.time(), database.cutoff())
+        return render(request, "board.html", user, nav="board", board=data)
+
+    @app.get("/api/web/board")
+    def board_data(request: Request, since: float | None = None):
+        user = require_user(request)
+        if since is not None and not math.isfinite(since):
+            raise HTTPException(422, "时间无效")
+        with database.connect() as db:
+            return JSONResponse(board(db, user, time.time(), database.cutoff(), since))
+
+    @app.get("/people/{username}")
+    def person_page(username: str, request: Request):
+        user = session(request)
+        if not user:
+            return RedirectResponse("/login", 303)
+        with database.connect() as db:
+            person = find_person(db, user, username)
+        if not person:
+            raise HTTPException(404, "没有这个成员，或对方没有公开记录")
+        return render(request, "person.html", user, nav="mine" if person["id"] == user["id"] else "board",
+                      person=dict(person))
+
+    @app.get("/api/web/people/{username}")
+    def person_data(username: str, request: Request, start: float, end: float, device: str = ""):
+        user = require_user(request)
+        if not (math.isfinite(start) and math.isfinite(end)) or not 0 < end - start <= MAX_SPAN:
+            raise HTTPException(422, "时间范围无效")
+        with database.connect() as db:
+            person = find_person(db, user, username)
+            if not person:
+                raise HTTPException(404, "没有这个成员，或对方没有公开记录")
+            if device and not db.execute("SELECT 1 FROM devices WHERE id=? AND user_id=?",
+                                         (device, person["id"])).fetchone():
+                raise HTTPException(404, "设备不存在")
+            return JSONResponse(person_view(db, person, user, time.time(), database.cutoff(), start, end, device))
+
+    def account_page(request, user, **context):
+        with database.connect() as db:
+            devices = db.execute("SELECT * FROM devices WHERE user_id=? AND last_seen>? ORDER BY first_seen",
                                  (user["id"], database.cutoff())).fetchall()
-        if device and device not in {row["id"] for row in devices}:
-            raise HTTPException(404, "设备不存在")
-        apps, records, total = usage_summary(user["id"], days, device or None)
-        return render(request, "dashboard.html", user, devices=devices, apps=apps, records=records,
-                      total=total, days=days, selected_device=device)
+        return render(request, "settings.html", user, nav="account", devices=devices, **context)
 
     @app.get("/settings")
     def settings_page(request: Request):
-        user = require_user(request)
-        return render(request, "settings.html", user)
+        return account_page(request, require_user(request))
 
     @app.post("/settings/token")
     async def rotate_token(request: Request):
@@ -254,7 +289,17 @@ def create_app(settings=None):
         raw = secrets.token_urlsafe(32)
         with database.connect() as db:
             db.execute("UPDATE users SET upload_hash=? WHERE id=?", (token_hash(raw), user["id"]))
-        return render(request, "settings.html", user, upload_token=raw)
+        user["upload_hash"] = token_hash(raw)
+        return account_page(request, user, upload_token=raw)
+
+    @app.post("/settings/sharing")
+    async def set_sharing(request: Request):
+        user = require_user(request)
+        form = await request.form(max_fields=5)
+        csrf(user, form)
+        with database.connect() as db:
+            db.execute("UPDATE users SET shared=? WHERE id=?", (int(form.get("shared") == "on"), user["id"]))
+        return RedirectResponse("/settings", 303)
 
     @app.post("/settings/password")
     async def change_password(request: Request):
@@ -262,11 +307,11 @@ def create_app(settings=None):
         form = await request.form(max_fields=5)
         csrf(user, form)
         if not await asyncio.to_thread(verify_password, str(form.get("old_password", "")), user["password_hash"]):
-            return render(request, "settings.html", user, error="原密码错误")
+            return account_page(request, user, error="原密码错误")
         try:
             encoded = await asyncio.to_thread(password_hash, str(form.get("new_password", "")))
         except ValueError as exc:
-            return render(request, "settings.html", user, error=str(exc))
+            return account_page(request, user, error=str(exc))
         with database.connect() as db:
             db.execute("UPDATE users SET password_hash=? WHERE id=?", (encoded, user["id"]))
             db.execute("DELETE FROM sessions WHERE user_id=?", (user["id"],))
@@ -278,8 +323,8 @@ def create_app(settings=None):
     def users_page(request: Request):
         user = require_admin(request)
         with database.connect() as db:
-            users = db.execute("SELECT id,username,is_admin,enabled,created_at FROM users ORDER BY id").fetchall()
-        return render(request, "users.html", user, users=users)
+            users = member_rows(db)
+        return render(request, "users.html", user, nav="members", users=users)
 
     @app.post("/admin/users")
     async def add_user(request: Request):
@@ -292,12 +337,12 @@ def create_app(settings=None):
                 raise ValueError("用户名须为 3–40 个英文字母、数字、下划线、点或连字符")
             encoded = await asyncio.to_thread(password_hash, str(form.get("password", "")))
             with database.connect() as db:
-                db.execute("INSERT INTO users(username,password_hash,is_admin,created_at) VALUES(?,?,?,?)",
-                    (username, encoded, int(form.get("is_admin") == "on"), time.time()))
+                db.execute("INSERT INTO users(username,password_hash,is_admin,shared,created_at) VALUES(?,?,?,?,?)",
+                    (username, encoded, int(form.get("is_admin") == "on"), int(form.get("shared") == "on"), time.time()))
         except (ValueError, sqlite3.IntegrityError) as exc:
             with database.connect() as db:
-                users = db.execute("SELECT * FROM users ORDER BY id").fetchall()
-            return render(request, "users.html", user, users=users,
+                users = member_rows(db)
+            return render(request, "users.html", user, nav="members", users=users,
                           error="用户名已存在" if isinstance(exc, sqlite3.IntegrityError) else str(exc))
         return RedirectResponse("/admin/users", 303)
 

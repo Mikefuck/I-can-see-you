@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% block title %}{{ status }} · 专注记录{% endblock %}
+{% block content %}
+<section class="halt">
+  <p class="halt-sign" aria-hidden="true">{{ status }}</p>
+  <div class="halt-copy">
+    <p class="kicker">{{ '需要登录' if status == 401 else '无法打开' }}<small>Status {{ status }}</small></p>
+    <h1 class="page-title">{{ message }}</h1>
+    <p class="row-actions">
+      {% if status == 401 %}<a class="btn is-primary" href="/login">去登录</a>
+      {% else %}<a class="btn is-primary" href="/">回到总览</a>{% endif %}
+    </p>
+  </div>
+</section>
+{% endblock %}

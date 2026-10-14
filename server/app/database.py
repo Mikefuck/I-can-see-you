@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS users (
     is_admin INTEGER NOT NULL DEFAULT 0,
     enabled INTEGER NOT NULL DEFAULT 1,
     upload_hash TEXT UNIQUE,
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    shared INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
@@ -88,6 +89,9 @@ class Database:
         with self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
+            # Databases created before opt-in sharing keep every account private.
+            if "shared" not in {row["name"] for row in db.execute("PRAGMA table_info(users)")}:
+                db.execute("ALTER TABLE users ADD COLUMN shared INTEGER NOT NULL DEFAULT 0")
             count = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
             if not count:
                 username = self.settings.admin_username

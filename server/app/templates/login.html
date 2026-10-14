@@ -1,9 +1,27 @@
 {% extends 'base.html' %}
+{% from '_clock.html' import clock %}
+{% block title %}登录 · 专注记录{% endblock %}
+{% block body_class %}is-login{% endblock %}
 {% block content %}
-<section class="login-layout"><div><p class="eyebrow">让设备使用有迹可循</p><h1>你的时间，<br>清晰呈现。</h1><p class="muted intro">查看自己的设备与应用使用记录。<br>账户由管理员创建，设备通过专属密钥接入。</p><div class="pills"><span>多设备</span><span>账户隔离</span><span>365 天内的记录</span></div></div>
-<section class="panel login"><h2>登录账户</h2><p class="muted">使用管理员为你创建的账户。</p>
-<form action="/login" method="post"><input type="hidden" name="csrf" value="{{ nonce }}">
-<label>用户名<input name="username" autocomplete="username" required maxlength="40" autofocus></label>
-<label>密码<input type="password" name="password" autocomplete="current-password" required maxlength="256"></label>
-<button class="primary full">登录</button></form></section></section>
+<section class="login">
+  <div class="login-dial">{{ clock("sbb-login") }}</div>
+  <div class="login-copy">
+    <p class="kicker">Focus Ledger</p>
+    <h1 class="login-title">专注<br>记录</h1>
+    <p class="lede">一张按时间排开的时刻表：你和成员的每台设备此刻是否在线、在用什么，今天又用了多久。</p>
+    <ul class="login-facts">
+      <li><b>多设备</b><span>每台电脑一条时间线</span></li>
+      <li><b>自愿公开</b><span>成员自己决定谁能看到</span></li>
+      <li><b>{{ retention }} 天</b><span>超出后自动删除</span></li>
+    </ul>
+  </div>
+  <form class="login-form" action="/login" method="post">
+    <h2 class="label">登录<small>Sign in</small></h2>
+    <input type="hidden" name="csrf" value="{{ nonce }}">
+    <label class="field"><span>用户名</span><input name="username" autocomplete="username" required maxlength="40" autofocus spellcheck="false" autocapitalize="off"></label>
+    <label class="field"><span>密码</span><input type="password" name="password" autocomplete="current-password" required maxlength="256"></label>
+    <button class="btn is-primary is-wide">登录</button>
+    <p class="hint">账户由管理员创建。忘记密码请联系管理员。</p>
+  </form>
+</section>
 {% endblock %}

@@ -1,14 +1,47 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
   <title>{% block title %}专注记录 · Focus Ledger{% endblock %}</title>
+  <link rel="icon" href="{{ url_for('static', path='mark.svg') }}" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+  <script src="{{ url_for('static', path='app.js') }}" defer></script>
 </head>
-<body>
-<header class="topbar"><a class="brand" href="/">◈ <span>专注记录<small>FOCUS LEDGER</small></span></a>
-{% if user %}<nav><a href="/">设备概览</a><a href="/settings">账户与密钥</a>{% if user.is_admin %}<a href="/admin/users">用户管理</a>{% endif %}</nav>
-<form action="/logout" method="post" class="inline"><input type="hidden" name="csrf" value="{{ user.csrf }}"><span class="muted">{{ user.username }}</span> <button class="ghost">退出</button></form>{% endif %}</header>
-<main>{% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}{% block content %}{% endblock %}</main>
-<footer>仅记录前台应用与使用时长 · 最多保留 {{ retention }} 天 · 所有时间以 UTC 展示</footer>
-</body></html>
+<body class="{% block body_class %}{% endblock %}">
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="/" aria-label="专注记录 · 总览">
+      <svg class="brand-mark" viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16"/><path d="M3 4h10v2H3zM3 7h6v2H3zM3 10h8v2H3z"/></svg>
+      <span class="brand-word">专注记录<small>Focus Ledger</small></span>
+    </a>
+    {% if user %}
+    <nav class="tabs" aria-label="页面">
+      <a href="/"{% if nav == 'board' %} aria-current="page"{% endif %}>总览<small>Board</small></a>
+      <a href="/people/{{ user.username }}"{% if nav == 'mine' %} aria-current="page"{% endif %}>我的记录<small>Mine</small></a>
+      <a href="/settings"{% if nav == 'account' %} aria-current="page"{% endif %}>账户<small>Account</small></a>
+      {% if user.is_admin %}<a href="/admin/users"{% if nav == 'members' %} aria-current="page"{% endif %}>成员<small>Members</small></a>{% endif %}
+    </nav>
+    <form class="who" action="/logout" method="post">
+      <input type="hidden" name="csrf" value="{{ user.csrf }}">
+      <span class="who-name">{{ user.username }}</span>
+      <button class="link-button">退出</button>
+    </form>
+    {% endif %}
+  </div>
+  <div class="mast-rule" aria-hidden="true"><i class="refresh-line" data-refresh-line></i></div>
+</header>
+<main class="page">
+  {% if error %}<div class="notice is-error" role="alert"><b>未完成</b><span>{{ error }}</span></div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+<footer class="foot">
+  <span>只记录前台应用的名称与使用时长</span>
+  <span>记录保留 {{ retention }} 天</span>
+  <span>时间按 <b data-tz>UTC</b> 显示</span>
+</footer>
+</body>
+</html>
