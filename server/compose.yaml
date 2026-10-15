@@ -1,16 +1,19 @@
+# 离线部署：先 docker load 导入镜像，再在同目录 .env 中设置管理员密码。
 services:
   server:
-    image: ${FOCUSLEDGER_IMAGE:-focusledger-server:2026.10.15-r3}
+    image: ${FOCUSLEDGER_IMAGE:-focusledger-server:2026.10.15-r6}
     platform: linux/amd64
     pull_policy: never
     restart: unless-stopped
     ports:
       - "${BIND_HOST:-0.0.0.0}:${SERVER_PORT:-8080}:8080"
     environment:
-      ADMIN_USERNAME: ${ADMIN_USERNAME:?Set ADMIN_USERNAME in .env}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
-      RETENTION_DAYS: ${RETENTION_DAYS:-365}
-      SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      # 用户名默认 admin；自定义时限 3–40 位英文字母、数字、下划线、点或短横线。
+      ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
+      # r4 起变更密码并重新部署后会同步到已有管理员；要求 12–256 个字符。
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?请在同目录 .env 中设置 ADMIN_PASSWORD（12–256 个字符）}"
+      RETENTION_DAYS: "${RETENTION_DAYS:-365}"
+      SECURE_COOKIES: "${SECURE_COOKIES:-false}"
       DATA_DIR: /data
     volumes:
       - focus-data:/data

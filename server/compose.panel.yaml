@@ -1,0 +1,35 @@
+# 面板单文件部署：先导入镜像，再将本文件粘贴到原编排项目。
+# 必须先将下面的 ADMIN_PASSWORD 替换成自己的 12–256 位密码。
+# 密码如含 $，每个 $ 写成 $$；普通英文单引号不会阻止 Compose 变量替换。
+# r4 起变更密码并重新部署后会同步到已有管理员，保留历史记录。
+services:
+  server:
+    image: focusledger-server:2026.10.15-r6
+    platform: linux/amd64
+    pull_policy: never
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      ADMIN_USERNAME: "admin"
+      ADMIN_PASSWORD: "REPLACE_WITH_YOUR_OWN_PASSWORD"
+      RETENTION_DAYS: "365"
+      SECURE_COOKIES: "false"
+      DATA_DIR: /data
+    volumes:
+      - focus-data:/data
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  focus-data:

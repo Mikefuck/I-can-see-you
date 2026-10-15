@@ -10,6 +10,7 @@ from ctypes import wintypes
 from pathlib import Path
 
 from .tracker import Application
+from .aliases import alias_for
 
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -166,6 +167,14 @@ class LastInput(ctypes.Structure):
     _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
 
 
+class ProcessEntry(ctypes.Structure):
+    _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+                ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", wintypes.LONG),
+                ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260)]
+
+
 class SYSTEM_POWER_STATUS(ctypes.Structure):
     _fields_ = [
         ("ACLineStatus", wintypes.BYTE),
@@ -239,8 +248,38 @@ class ForegroundReader:
 
     def alias_for(self, process):
         """Match "chrome.exe" by its full name first, then by "chrome" so the suffix may be omitted."""
-        key = process.casefold()
-        return self.aliases.get(key) or self.aliases.get(Path(key).stem)
+        return alias_for(self.aliases, process)
+
+    def running_applications(self):
+        """One entry per running executable; protected/exited processes keep their file name."""
+        kernel = self.kernel
+        kernel.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        for name in ("Process32FirstW", "Process32NextW"):
+            function = getattr(kernel, name)
+            function.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
+            function.restype = wintypes.BOOL
+        snapshot = kernel.CreateToolhelp32Snapshot(0x00000002, 0)
+        if snapshot == ctypes.c_void_p(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        apps = {}
+        try:
+            entry = ProcessEntry()
+            entry.dwSize = ctypes.sizeof(entry)
+            found = kernel.Process32FirstW(snapshot, ctypes.byref(entry))
+            while found:
+                process = clean_text(entry.szExeFile)[:200]
+                key = process.casefold()
+                if entry.th32ProcessID and process and key not in apps:
+                    path = self._process_path(entry.th32ProcessID)
+                    name = file_description(path) if path else Path(process).stem
+                    apps[key] = Application(name[:200], process)
+                found = kernel.Process32NextW(snapshot, ctypes.byref(entry))
+            if ctypes.get_last_error() != 18:  # ERROR_NO_MORE_FILES
+                raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            kernel.CloseHandle(snapshot)
+        return sorted(apps.values(), key=lambda app: (app.app_name.casefold(), app.process_name.casefold()))
 
     def _window_process(self, window):
         pid = wintypes.DWORD()

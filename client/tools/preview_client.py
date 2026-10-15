@@ -5,6 +5,7 @@ a directory to write the images there instead of client/docs."""
 import os
 import sys
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from queue import Queue
@@ -18,9 +19,11 @@ sys.path.insert(0, str(CLIENT))
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFontDatabase
 from focus_agent import gui
+from focus_agent import motion
 from focus_agent.config import Config
 from focus_agent.store import EventStore
 from focus_agent.tracker import Application
+from focus_agent.process_picker import ProcessPicker
 
 APPS = [("Microsoft Edge", "msedge.exe"), ("Visual Studio Code", "Code.exe"), ("微信", "Weixin.exe"),
         ("Windows 文件资源管理器", "explorer.exe"), ("Microsoft Word", "WINWORD.EXE")]
@@ -96,6 +99,8 @@ def synthetic_day(now):
 
 
 def main():
+    # Static documentation images should capture the destination, never a half-finished transition.
+    motion.animations_enabled = lambda: False
     gui.ForegroundReader, gui.Uploader, gui.BatteryReader = FakeReader, FakeUploader, FakeBattery
     gui.SystemEventWindow, gui.startup_enabled = NoSystemEvents, lambda: True
     app = QApplication([])
@@ -122,6 +127,17 @@ def main():
     app.processEvents()
     docs = Path(sys.argv[1]) if len(sys.argv) > 1 else CLIENT / "docs"
     docs.mkdir(parents=True, exist_ok=True)
+    for theme in ("light", "dark"):
+        window.config = replace(window.config, theme=theme)
+        window.apply_theme()
+        for page, name in ((window.LEDGER, "ledger"), (window.SETTINGS, "settings"), (window.MANAGEMENT, "management")):
+            window.show_page(page)
+            app.processEvents()
+            assert window.grab().save(str(docs / f"client-{name}-{theme}-preview.png"))
+    window.config = replace(window.config, theme="light")
+    window.apply_theme()
+    window.show_page(window.LEDGER)
+    app.processEvents()
     assert window.grab().save(str(docs / "client-preview.png"))
     window.show_page(window.SETTINGS)
     app.processEvents()
@@ -134,6 +150,22 @@ def main():
     window.stop_collection()
     app.processEvents()
     assert window.grab().save(str(docs / "client-paused-preview.png"))
+    picker = ProcessPicker(window, config.app_aliases,
+                           loader=lambda: [Application(name, process) for name, process in APPS])
+    deadline = time.monotonic() + 3
+    while picker.loading and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert not picker.loading
+    picker.show()
+    picker.toggle_row(0, 1)
+    picker.toggle_row(1, 1)
+    for theme in ("light", "dark"):
+        window.config = replace(window.config, theme=theme)
+        window.apply_theme()
+        app.processEvents()
+        assert picker.grab().save(str(docs / f"client-process-picker-{theme}-preview.png"))
+    picker.close()
     window.quit_app()
     print("GUI preview rendered successfully")
 

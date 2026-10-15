@@ -11,10 +11,32 @@ Authorization: Bearer 用户在网页生成的上传密钥
 `GET /api/v1/agent/check` 返回：
 
 ```json
-{"ok":true,"account_id":1,"username":"alice","schema_version":1,"features":["app_usage","device_status","management"],"retention_days":365}
+{"ok":true,"account_id":1,"username":"alice","schema_version":1,"features":["app_usage","device_status","management","app_aliases"],"retention_days":365}
 ```
 
 `account_id` 在当前服务器中稳定，用于客户端绑定队列；上传归属以服务端根据密钥查出的用户为准，不信任客户端提供的用户信息。
+
+## 同步应用名翻译
+
+`PUT /api/v1/agent/app-aliases` 使用同一上传 Bearer 密钥，正文示例：
+
+```json
+{
+  "device": {
+    "id": "2ad514c4-e596-4ca9-b559-a812a61a8382",
+    "name": "我的工作电脑",
+    "platform": "windows",
+    "agent_version": "0.2.3"
+  },
+  "app_aliases": {"msedge.exe": "浏览器", "code": "代码编辑器"}
+}
+```
+
+映射最多 500 条；进程名和显示名均为去除首尾空白后的 1–200 个字符。进程名不区分大小写，完整路径归一为文件名，可省略 `.exe`；完整进程名优先于省略后缀的名称。成功返回 `{"ok":true,"device_id":"…","app_aliases":{…}}`，其中映射为归一化后的完整快照。每次请求替换该设备的整份映射，空对象删除全部翻译，重复请求幂等。
+
+服务端持久保存设备映射，查询时用于该设备保留期内所有历史记录、当前应用、时间线和排行。原始事件、进程名、时长和去重摘要不改写，离线旧记录补传时也使用最新映射显示；删除翻译后显示各条记录上传时的名称。此操作不影响其他设备，无需上传新使用记录；未知设备会按上传规则登记，属于其他账户的设备返回 409，错误密钥返回 401，无效映射返回 422。
+
+客户端保存设置后立即后台同步，失败按上传退避策略重试；映射保存在本机配置中，重启后会再次同步。旧版服务端返回 404 / 405 时，客户端继续上传使用记录，并提示升级服务端。
 
 ## 上传包
 

@@ -16,16 +16,20 @@ from PySide6.QtGui import (
     QAction, QActionGroup, QColor, QFont, QFontMetrics, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap, QPolygonF, QShortcut,
 )
 from PySide6.QtWidgets import (
-    QAbstractButton, QAbstractItemView, QApplication, QCheckBox, QComboBox, QFrame, QGridLayout,
+    QAbstractButton, QAbstractItemView, QApplication, QFrame, QGridLayout,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox,
-    QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QSystemTrayIcon, QTableWidget,
+    QScrollArea, QSizePolicy, QSpinBox, QSystemTrayIcon, QTableWidget,
     QTableWidgetItem, QToolTip, QVBoxLayout, QWidget,
 )
 
 from . import __version__
 from .config import save_config
+from .aliases import alias_for, process_key
+from .ambient import AmbientBackground
+from .motion import MotionButton as QPushButton, MotionCheckBox as QCheckBox, MotionComboBox as QComboBox, MotionValue, PageStack
 from .network import Uploader, check_connection
 from .management_ui import ManagementPanel
+from .process_picker import ProcessPicker
 from .store import PENDING, SENT
 from .tracker import SessionTracker
 from .theme import THEME_LABELS, THEMES, colors_for, palette_for
@@ -39,7 +43,7 @@ DAY_MARKS = {"startup": True, "resume": True, "shutdown": False, "suspend": Fals
 WEEKDAYS = "一二三四五六日"
 
 
-# Swiss / International Typographic Style, set as a railway timetable: white paper, black type and rules on a
+# Swiss / International Typographic Style, set as a railway timetable: warm paper, ink type and rules on a
 # two-column grid (hanging section labels, content to their right), and one signal red reserved for what is
 # live: the recording lamp, the session still being recorded, the action to take next and keyboard focus.
 INK, PAPER, RED = "#101010", "#ffffff", "#eb0000"
@@ -78,7 +82,8 @@ def glyph_directory(colors=None):
 # the :hover / :focus rules. Labels that show figures get their font in code (see figure_font), because QSS keeps
 # only the first font family and would drop the Chinese fallback.
 STYLE = Template("""
-QMainWindow,QWidget#root,QWidget#page,QScrollArea#scroll{background:$paper;border:0;}
+QMainWindow{background:$paper;border:0;}
+QWidget#root,QWidget#page,QScrollArea#scroll,QWidget#scrollViewport{background:transparent;border:0;}
 QWidget{color:$ink;}
 QLabel{background:transparent;}
 QDialog,QMessageBox{background:$paper;}
@@ -134,8 +139,8 @@ QPushButton#themeButton:focus{border-color:$red;}
 QPushButton#themeButton::menu-indicator{image:none;}
 
 QCheckBox{spacing:12px;padding:4px 0;}
-QCheckBox::indicator{width:16px;height:16px;border:2px solid $ink;background:$paper;}
-QCheckBox::indicator:checked{background:$ink;image:url("$glyphs/check.svg");}
+QCheckBox::indicator,QTableWidget::indicator{width:16px;height:16px;border:2px solid $ink;background:$paper;}
+QCheckBox::indicator:checked,QTableWidget::indicator:checked{background:$ink;image:url("$glyphs/check.svg");}
 QCheckBox::indicator:focus{border-color:$red;}
 
 QTableWidget{background:transparent;border:0;outline:0;gridline-color:transparent;selection-background-color:$field;selection-color:$ink;}
@@ -249,6 +254,8 @@ class NavTab(QAbstractButton):
         font.setPixelSize(15)
         font.setBold(True)
         self.setFont(font)
+        self.selection = MotionValue(self, duration=220)
+        self.toggled.connect(lambda checked: self.selection.to(1 if checked else (.25 if self.underMouse() else 0)))
 
     def set_flagged(self, flagged):
         self.flagged = flagged
@@ -258,11 +265,11 @@ class NavTab(QAbstractButton):
         return QSize(QFontMetrics(self.font()).horizontalAdvance(self.text()) + 12, 54)
 
     def enterEvent(self, event):
-        self.update()
+        self.selection.to(1 if self.isChecked() else .25)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self.update()
+        self.selection.to(1 if self.isChecked() else 0)
         super().leaveEvent(event)
 
     def paintEvent(self, event):
@@ -276,8 +283,8 @@ class NavTab(QAbstractButton):
         painter.setPen(QColor(color))
         painter.drawText(QRectF(0, 0, width + 2, text_height), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                          self.text())
-        if self.isChecked():
-            painter.fillRect(QRectF(0, text_height, width, self.BAR), QColor(colors["ink"]))
+        if self.selection.value:
+            painter.fillRect(QRectF(0, text_height, width * self.selection.value, self.BAR), QColor(colors["ink"]))
         if self.flagged:
             top = (text_height - metrics.capHeight()) / 2 - 1
             painter.fillRect(QRectF(width + 3, top, 6, 6), QColor(colors["red"]))
@@ -520,15 +527,14 @@ class MainWindow(QMainWindow):
     # ---- layout -------------------------------------------------------------------------------------------------
 
     def _build_ui(self):
-        root = QWidget()
-        root.setObjectName("root")
+        root = self.background = AmbientBackground(self)
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self._build_masthead())
         layout.addWidget(self._build_state_band())
-        self.pages = QStackedWidget()
+        self.pages = PageStack()
         self.pages.addWidget(self._scrolling(self._build_ledger_page()))
         self.pages.addWidget(self._build_settings_page())
         self.management_panel = ManagementPanel(self)
@@ -618,12 +624,16 @@ class MainWindow(QMainWindow):
         self.apply_theme()
 
     def apply_theme(self):
+        self.pages.finish_transition()
         self.theme_colors = THEMES[self.resolved_theme()]
         palette = palette_for(self.theme_colors)
         self.setPalette(palette)
         self.setStyleSheet(stylesheet(self.theme_colors))
         for menu in self.findChildren(QMenu):
             menu.setPalette(palette)
+        for picker in self.findChildren(ProcessPicker):
+            picker.theme_colors = self.theme_colors
+            picker.setPalette(palette)
         label = THEME_LABELS[self.config.theme]
         self.theme_button.setText("主题 · " + label)
         self.theme_button.setAccessibleName("切换主题，当前" + label)
@@ -811,6 +821,10 @@ class MainWindow(QMainWindow):
         area.setFrameShape(QFrame.Shape.NoFrame)
         area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         area.setWidget(widget)
+        # QScrollArea enables auto-fill on its content; let the shared ambient background show through.
+        area.viewport().setObjectName("scrollViewport")
+        area.viewport().setAutoFillBackground(False)
+        widget.setAutoFillBackground(False)
         return area
 
     @staticmethod
@@ -967,7 +981,7 @@ class MainWindow(QMainWindow):
     def _aliases_section(self):
         frame, layout, _ = self._section("应用名翻译", "App names")
         layout.addWidget(self._label("hint", "按进程名匹配（不区分大小写，可省略 .exe），例如 chrome.exe → 浏览器；原始进程名仍会保留。"
-                                     "在「记录」页双击最近记录可快速为该应用添加翻译，修改后保存设置生效。"))
+                                     "可从系统进程批量选择；保存后立即同步本机历史记录的显示名称，离线时自动重试。"))
         self.aliases = self._ledger_table(2, ["进程名", "自定义显示名"])
         self.aliases.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked |
                                      QAbstractItemView.EditTrigger.EditKeyPressed)
@@ -976,10 +990,13 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.aliases)
         actions = QHBoxLayout()
         actions.setSpacing(8)
+        self.choose_processes = QPushButton("选择系统进程")
+        self.choose_processes.clicked.connect(self.pick_processes)
         add_alias = QPushButton("添加翻译")
         add_alias.clicked.connect(lambda: self.add_alias())
         remove_alias = QPushButton("删除选中")
         remove_alias.clicked.connect(self.remove_alias)
+        actions.addWidget(self.choose_processes)
         actions.addWidget(add_alias)
         actions.addWidget(remove_alias)
         actions.addStretch()
@@ -1082,11 +1099,46 @@ class MainWindow(QMainWindow):
         self.aliases.setFixedHeight(self.aliases.horizontalHeader().sizeHint().height() + rows * 34 + 2)
 
     def alias_row(self, process):
+        key = process_key(process)
+        fallback = None
         for row in range(self.aliases.rowCount()):
             item = self.aliases.item(row, 0)
-            if item is not None and item.text().strip().casefold() == process.casefold():
+            if item is None:
+                continue
+            existing = process_key(item.text())
+            if existing == key:
                 return row
-        return None
+            if existing == Path(key).stem:
+                fallback = row
+        return fallback
+
+    def pick_processes(self):
+        if self.job_thread is not None:
+            return
+        try:
+            aliases = self.collect_aliases()
+        except ValueError as exc:
+            QMessageBox.warning(self, "设置有误", str(exc))
+            return
+        picker = ProcessPicker(self, aliases)
+        if picker.exec() == ProcessPicker.DialogCode.Accepted:
+            self.add_process_aliases(picker.selected_apps())
+        picker.deleteLater()
+
+    def add_process_aliases(self, apps):
+        first = None
+        for app in apps:
+            row = self.alias_row(app.process_name)
+            if row is None:
+                row = self.aliases.rowCount()
+                self.aliases.insertRow(row)
+                self.aliases.setItem(row, 0, QTableWidgetItem(app.process_name))
+                self.aliases.setItem(row, 1, QTableWidgetItem(app.app_name))
+            if first is None:
+                first = row
+        self.fit_aliases()
+        if first is not None:
+            self.edit_alias(first, 1)
 
     def edit_alias(self, row, column):
         self.show_page(self.SETTINGS)
@@ -1134,7 +1186,7 @@ class MainWindow(QMainWindow):
             process = self.aliases.item(row, 0)
             display_name = self.aliases.item(row, 1)
             if process and display_name and process.text().strip() and display_name.text().strip():
-                key = process.text().strip().casefold()
+                key = process_key(process.text())
                 if key in aliases:
                     raise ValueError(f"应用名翻译中的进程名重复：{process.text().strip()}")
                 aliases[key] = display_name.text().strip()
@@ -1226,6 +1278,8 @@ class MainWindow(QMainWindow):
         if hasattr(self.reader, "set_aliases"):
             self.reader.set_aliases(candidate.app_aliases)
         self.uploader.configure(candidate)
+        if candidate.app_aliases != previous.app_aliases:
+            self.upload_status.setText("正在同步应用名翻译…")
         self.account.setText(candidate.username)
         self.show_startup_state(candidate.startup)
         self.set_dirty(False)
@@ -1351,7 +1405,8 @@ class MainWindow(QMainWindow):
             if event.get("kind") == "app_usage":
                 segments.append((max(datetime.fromisoformat(event["started_at"]).timestamp(), start),
                                  datetime.fromisoformat(event["ended_at"]).timestamp(),
-                                 event["app_name"], event["process_name"]))
+                                 alias_for(self.config.app_aliases, event["process_name"]) or event["app_name"],
+                                 event["process_name"]))
             elif event.get("reason") in DAY_MARKS:
                 marks.append((datetime.fromisoformat(event["occurred_at"]).timestamp(), DAY_MARKS[event["reason"]]))
         self.day_recorded = sum(end - start for start, end, *_ in segments)
@@ -1387,7 +1442,8 @@ class MainWindow(QMainWindow):
                 values = ["设备状态", STATUS_REASONS.get(event.get("reason"), event.get("reason", "—")), ended,
                           battery_summary(event)]
             else:
-                values = [event["app_name"], event["process_name"], ended, f"{event['duration_seconds']:.1f} 秒"]
+                name = alias_for(self.config.app_aliases, event["process_name"]) or event["app_name"]
+                values = [name, event["process_name"], ended, f"{event['duration_seconds']:.1f} 秒"]
             label, bold = states.get(state, ("服务器拒收", True))
             values.append(label)
             for column, value in enumerate(values):
@@ -1506,6 +1562,7 @@ class MainWindow(QMainWindow):
         self.uploader.trigger()
 
     def about_to_quit(self):
+        self.background.stop_motion()
         if not self.quitting:
             # Not our own "退出程序": when the main window exists, Qt answers WM_ENDSESSION for it
             # (possibly before our event window) and quits, so finish the session-end work here too.
@@ -1575,6 +1632,7 @@ class MainWindow(QMainWindow):
             self.show_window()
             return
         self.quitting = True
+        self.background.stop_motion()
         try:
             self.stop_collection()
             self.uploader.flush(2.0)

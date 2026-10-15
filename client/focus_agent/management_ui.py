@@ -1,10 +1,11 @@
 from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QGridLayout, QHeaderView, QLabel, QLineEdit,
-    QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QGridLayout, QHeaderView, QLabel, QLineEdit,
+    QMessageBox, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .management import ManagementSession
+from .motion import MotionButton as QPushButton, MotionCheckBox as QCheckBox
 
 
 class ManagementJob(QObject):

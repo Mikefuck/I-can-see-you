@@ -22,6 +22,10 @@ class RejectedEvents(RuntimeError):
         self.indexes = indexes
 
 
+class AliasSyncUnavailable(RuntimeError):
+    pass
+
+
 def rejected_event_indexes(error):
     # Only validation errors located at body.events[i] identify a bad record. Other 422s
     # (for example a device clock running ahead) are temporary and must keep the queue intact.
@@ -40,11 +44,11 @@ def rejected_event_indexes(error):
     return indexes
 
 
-def request_json(config, path, body=None):
+def request_json(config, path, body=None, method=None):
     data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
     request = urllib.request.Request(config.base_url + path, data=data,
         headers={"Authorization": "Bearer " + config.api_key, "Content-Type": "application/json",
-                 "User-Agent": "FocusLedger/" + __version__})
+                 "User-Agent": "FocusLedger/" + __version__}, method=method)
     try:
         with urllib.request.build_opener(NoRedirect).open(request, timeout=10) as response:
             raw = response.read(1024 * 1024 + 1)
@@ -52,6 +56,8 @@ def request_json(config, path, body=None):
                 raise ValueError("服务器响应过大")
             return json.loads(raw)
     except urllib.error.HTTPError as exc:
+        if path == "/api/v1/agent/app-aliases" and exc.code in (404, 405):
+            raise AliasSyncUnavailable("服务端不支持历史名称同步，请升级服务端") from None
         if exc.code == 422 and body is not None:
             indexes = rejected_event_indexes(exc)
             if indexes:
@@ -86,6 +92,7 @@ class Uploader:
         self.store = store
         self.lock = threading.Lock()
         self.config = replace(config)
+        self.alias_state = None
         self.messages = Queue()
         self.wake = threading.Event()
         self.stop_event = threading.Event()
@@ -97,6 +104,7 @@ class Uploader:
     def configure(self, config):
         with self.lock:
             self.config = replace(config)
+            self.alias_state = None
         self.wake.set()
 
     def trigger(self):
@@ -127,6 +135,31 @@ class Uploader:
         self.stop_event.set()
         self.wake.set()
 
+    def sync_aliases(self, config):
+        """Retry from the saved config after outages/restarts; cache only confirmed snapshots."""
+        signature = (config.base_url, config.api_key, config.device_id, tuple(sorted(config.app_aliases.items())))
+        with self.lock:
+            state = self.alias_state
+        if state is not None and state[0] == signature:
+            return state[1]
+        body = {"device": {"id": config.device_id, "name": config.device_name,
+                "platform": "windows", "agent_version": __version__}, "app_aliases": config.app_aliases}
+        try:
+            result = request_json(config, "/api/v1/agent/app-aliases", body, method="PUT")
+        except AliasSyncUnavailable as exc:
+            # Older servers still receive usage records. Recheck on the next settings save/start.
+            warning = str(exc)
+        except RuntimeError as exc:
+            raise RuntimeError("记录已上传，名称同步失败：" + str(exc)) from exc
+        else:
+            if (not isinstance(result, dict) or result.get("ok") is not True or
+                    result.get("device_id") != config.device_id or result.get("app_aliases") != config.app_aliases):
+                raise RuntimeError("服务器未确认应用名翻译，稍后重试")
+            warning = ""
+        with self.lock:
+            self.alias_state = (signature, warning)
+        return warning
+
     def _run(self):
         failures = 0
         last_cleanup = 0
@@ -151,8 +184,13 @@ class Uploader:
                     if not isinstance(acknowledged, list) or set(acknowledged) != sent_ids:
                         raise RuntimeError("服务器未完整确认记录，保留缓存等待重试")
                     self.store.acknowledge(config.destination, acknowledged)
+                    warning = self.sync_aliases(config)
                     failures = 0
-                    self.messages.put((True, "上传成功 · " + time.strftime("%H:%M:%S")))
+                    if warning:
+                        self.messages.put((False, "记录已上传 · " + warning))
+                    else:
+                        self.messages.put((True, "上传成功 · " + time.strftime("%H:%M:%S") +
+                                           (" · 名称已同步" if config.app_aliases else "")))
                     if self.store.counts(config.destination)[0]:
                         wait = 1
                 except RejectedEvents as exc:

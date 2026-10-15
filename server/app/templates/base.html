@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#ffffff">
+  <meta name="theme-color" content="#f6f1df">
   <title>{% block title %}专注记录 · Focus Ledger{% endblock %}</title>
   <link rel="icon" href="{{ url_for('static', path='mark.svg') }}" type="image/svg+xml">
   <script src="{{ url_for('static', path='theme.js') }}"></script>
@@ -12,6 +12,7 @@
   <script src="{{ url_for('static', path='app.js') }}" defer></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
+<div class="ambient" aria-hidden="true"></div>
 <header class="mast">
   <div class="mast-in">
     <a class="brand" href="/" aria-label="专注记录 · 总览">

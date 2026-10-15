@@ -170,8 +170,8 @@
     fail() { if (this.line) { this.line.classList.remove("is-running"); this.line.classList.add("is-failed"); } },
   };
 
-  async function getJSON(url) {
-    const response = await fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
+  async function getJSON(url, options = {}) {
+    const response = await fetch(url, { ...options, credentials: "same-origin", headers: { Accept: "application/json" } });
     if (response.status === 401) { location.href = "/login"; throw new Error("请先登录"); }
     if (!response.ok) {
       let detail = `服务器返回 ${response.status}`;
@@ -669,6 +669,8 @@
       records: body.querySelector("[data-records]"), status: body.querySelector("[data-status]"),
     };
     let table = null, payload = null, pinned = null, timer = 0, request = 0, intro = true;
+    let pendingRequest = null, bodyMotion = null, previousState = null;
+    calm.addEventListener("change", () => { if (calm.matches) bodyMotion?.cancel(); });
 
     const readState = () => {
       const query = new URLSearchParams(location.search);
@@ -693,7 +695,8 @@
       els.spans.style.setProperty("--seg", Object.keys(SPANS).indexOf(state.span));
       for (const link of els.spans.querySelectorAll("[data-span]")) {
         link.href = href({ span: link.dataset.span });
-        link.toggleAttribute("aria-current", link.dataset.span === state.span);
+        if (link.dataset.span === state.span) link.setAttribute("aria-current", "true");
+        else link.removeAttribute("aria-current");
       }
       const days = SPANS[state.span];
       els.label.textContent = days === 1 ? `${md(bounds.start)} ${weekday(bounds.start, true)}`
@@ -708,10 +711,20 @@
     }
 
     function deviceChips(state) {
-      els.devices.replaceChildren(
-        h("a", { class: "chip", href: href({ device: "" }), "aria-current": state.device ? null : "true", text: "全部设备" }),
-        ...payload.devices.map(device => h("a", { class: "chip", href: href({ device: device.id }),
-          "aria-current": state.device === device.id ? "true" : null }, lamp(device.state), device.name)));
+      // Keep the actual links so focus and the selection transition survive data refreshes.
+      const existing = new Map([...els.devices.children].map(link => [link.dataset.device, link]));
+      const devices = [{ id: "", name: "全部设备" }, ...payload.devices];
+      devices.forEach((device, index) => {
+        const id = String(device.id);
+        const link = existing.get(id) || h("a", { class: "chip", "data-device": id, "data-key": `device-${id}` });
+        existing.delete(id);
+        link.href = href({ device: id });
+        if (state.device === id) link.setAttribute("aria-current", "true");
+        else link.removeAttribute("aria-current");
+        link.replaceChildren(...(id ? [lamp(device.state), device.name] : [device.name]));
+        if (els.devices.children[index] !== link) els.devices.insertBefore(link, els.devices.children[index] || null);
+      });
+      for (const link of existing.values()) link.remove();
       const contact = Math.max(0, ...payload.devices.map(device => device.last_seen));
       els.meta.textContent = payload.devices.length ? `${payload.devices.length} 台设备 · 最近联络 ${ago(contact)}` : "还没有设备上传记录";
     }
@@ -907,7 +920,8 @@
         const [name, process] = payload.apps[app];
         const bar = stagger(h("i"), index);
         bar.style.width = `${(seconds / max * 100).toFixed(2)}%`;
-        const item = stagger(h("li", { tabindex: "0", "data-app": app, class: pinned === app ? "is-on" : null },
+        const item = stagger(h("li", { tabindex: "0", role: "button", "aria-pressed": String(pinned === app),
+          "data-app": app, "data-key": `app-${app}`, class: pinned === app ? "is-on" : null },
           h("span", { class: "rank-no", text: pad(index + 1) }),
           h("span", { class: "rank-name" }, h("b", { text: name }), h("small", { text: process })),
           h("span", { class: "rank-val" }, span(seconds), h("small", { text: `${total ? Math.round(seconds / total * 100) : 0}%` })),
@@ -926,7 +940,11 @@
         const app = appOf(event);
         if (app == null) return;
         pinned = pinned === app ? null : app;
-        for (const node of listNode.children) node.classList.toggle("is-on", +node.dataset.app === pinned);
+        for (const node of listNode.children) {
+          const selected = +node.dataset.app === pinned;
+          node.classList.toggle("is-on", selected);
+          node.setAttribute("aria-pressed", String(selected));
+        }
         focus(pinned);
       };
       listNode.addEventListener("click", toggle);
@@ -1108,31 +1126,61 @@
     }
 
     async function load(quiet) {
+      if (quiet && body.getAttribute("aria-busy") === "true") return;
       clearTimeout(timer);
+      pendingRequest?.abort();
+      pendingRequest = new AbortController();
       const state = readState(), bounds = range(state), ticket = ++request, every = PERSON_POLL[state.span];
-      if (!quiet) body.classList.add("is-loading");
+      const hadPayload = !!payload;
+      const order = Object.keys(SPANS);
+      const direction = previousState ? Math.sign(order.indexOf(state.span) - order.indexOf(previousState.span)
+        || bounds.anchor - range(previousState).anchor) || 1 : 1;
+      previousState = state;
+      body.setAttribute("aria-busy", "true");
+      if (!quiet) {
+        bodyMotion?.cancel();
+        keepFocus(() => { controls(state, bounds); if (payload) deviceChips(state); });
+      }
+      // Fast responses never flash a loading state. Slow responses keep their current content visible.
+      const loading = !quiet ? setTimeout(() => {
+        if (ticket === request) body.classList.add("is-loading");
+      }, 120) : 0;
       try {
         const query = new URLSearchParams({ start: String(bounds.start), end: String(bounds.end) });
         if (state.device) query.set("device", state.device);
-        const next = await getJSON(`/api/web/people/${encodeURIComponent(username)}?${query}`);
+        const next = await getJSON(`/api/web/people/${encodeURIComponent(username)}?${query}`, { signal: pendingRequest.signal });
         if (ticket !== request) return;
         sync(next.now);
         payload = next;
-        if (!quiet) intro = true;
         keepFocus(() => render(state, bounds));
+        if (!quiet && hadPayload && !calm.matches && body.animate) {
+          body.classList.remove("is-loading", "is-entering");
+          bodyMotion = body.animate([
+            { opacity: .35, transform: `translateX(${direction * 8}px)` },
+            { opacity: 1, transform: "translateX(0)" },
+          ], { duration: 220, easing: "cubic-bezier(.2,.75,0,1)" });
+        }
         if (bounds.end > now()) refresh.run(every);
       } catch (error) {
-        if (ticket !== request) return;
+        if (ticket !== request || error.name === "AbortError") return;
+        if (!quiet) {
+          for (const part of [els.stats, els.ranking, els.columns, els.records, els.status]) part.replaceChildren();
+        }
         els.view.replaceChildren(h("p", { class: "notice is-error" }, h("b", { text: "未能载入" }), h("span", { text: error.message })));
         table = null;
         refresh.fail();
       } finally {
-        if (ticket === request) body.classList.remove("is-loading");
+        clearTimeout(loading);
+        if (ticket === request) {
+          body.classList.remove("is-loading");
+          body.setAttribute("aria-busy", "false");
+        }
       }
       if (bounds.end > now()) timer = setTimeout(() => load(true), every * 1000);
     }
 
     function go(url) {
+      if (new URL(url, location.href).href === location.href) return;
       history.pushState(null, "", url);
       pinned = null;
       load(false);
@@ -1185,9 +1233,25 @@
     new ResizeObserver(update).observe(mast);
   }
 
+  function navigationIndicator() {
+    const tabs = doc.querySelector(".tabs"), current = tabs?.querySelector("[aria-current]");
+    if (!current) return;
+    const marker = h("i", { class: "tab-indicator", "aria-hidden": "true" });
+    tabs.append(marker);
+    const place = () => {
+      marker.style.width = `${current.offsetWidth}px`;
+      marker.style.transform = `translateX(${current.offsetLeft}px)`;
+      tabs.classList.add("has-indicator");
+    };
+    place();
+    new ResizeObserver(place).observe(tabs);
+    doc.fonts?.ready.then(place);
+  }
+
   function start() {
     refresh.line = doc.querySelector("[data-refresh-line]");
     mastHeight();
+    navigationIndicator();
     localTimes();
     connectHints();
     copyToken();

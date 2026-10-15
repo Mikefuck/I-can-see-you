@@ -65,3 +65,22 @@ class Batch(StrictModel):
     schema_version: Literal[1] = 1
     device: Device
     events: list[BatchEvent] = Field(max_length=500)
+
+
+class AppAliases(StrictModel):
+    device: Device
+    app_aliases: dict[str, str] = Field(max_length=500)
+
+    @field_validator("app_aliases")
+    @classmethod
+    def valid_aliases(cls, value):
+        result = {}
+        for process, name in value.items():
+            key = process.strip().replace("/", "\\").rsplit("\\", 1)[-1].casefold()
+            name = name.strip()
+            if not 1 <= len(key) <= 200 or not 1 <= len(name) <= 200:
+                raise ValueError("进程名和显示名须为 1–200 个字符")
+            if key in result:
+                raise ValueError("进程名重复")
+            result[key] = name
+        return result

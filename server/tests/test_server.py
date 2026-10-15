@@ -484,7 +484,7 @@ def test_database_without_the_sharing_column_is_upgraded_privately(tmp_path):
                          "password_hash TEXT NOT NULL, is_admin INTEGER NOT NULL DEFAULT 0, "
                          "enabled INTEGER NOT NULL DEFAULT 1, upload_hash TEXT UNIQUE, created_at REAL NOT NULL);")
         db.execute("INSERT INTO users(username,password_hash,is_admin,created_at) VALUES('veteran','x',1,0)")
-    database = Database(Settings(path, admin_username="admin", admin_password=PASSWORD))
+    database = Database(Settings(path, admin_username="veteran", admin_password=PASSWORD))
     database.initialize()
     database.initialize()
     with database.connect() as db:

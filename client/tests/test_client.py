@@ -217,7 +217,9 @@ def test_uploader_sets_aside_rejected_event_and_uploads_the_rest(tmp_path, monke
     store.add(first, events)
     calls = []
 
-    def fake_request(config, path, body=None):
+    def fake_request(config, path, body=None, method=None):
+        if path == "/api/v1/agent/app-aliases":
+            return {"ok": True, "device_id": config.device_id, "app_aliases": body["app_aliases"]}
         calls.append([e["id"] for e in body["events"]])
         if len(calls) == 1:
             raise network.RejectedEvents({1})

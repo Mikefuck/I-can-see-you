@@ -49,19 +49,21 @@ def package_client(include_portable=False):
         print(f"{path.relative_to(ROOT)}: {path.stat().st_size / 1024 / 1024:.1f} MiB")
 
 
-def package():
+def package(server_only=False):
     client_root = ROOT / "client"
     server = ROOT / "server"
     client = client_root / "dist" / "FocusLedger"
     single_exe = client_root / "dist" / "FocusLedger.exe"
     image = server / "release" / "FocusLedger-server-linux-amd64.tar"
     image_info = server / "release" / "image-info.json"
-    required = [client / "FocusLedger.exe", single_exe,
-                client_root / "release" / "FocusLedger-Setup-windows-x64.exe", image, image_info,
-                server / "release" / "IMAGE-SHA256SUMS.txt"]
+    required = [image, image_info, server / "release" / "IMAGE-SHA256SUMS.txt"]
+    if not server_only:
+        required.extend([client / "FocusLedger.exe", single_exe,
+                         client_root / "release" / "FocusLedger-Setup-windows-x64.exe"])
     for path in required:
         if not path.is_file():
-            raise SystemExit(f"Missing {path}. Run client/build.ps1 -Package all and server/build_image.py first.")
+            instructions = "server/build_image.py" if server_only else "client/build.ps1 -Package all and server/build_image.py"
+            raise SystemExit(f"Missing {path}. Run {instructions} first.")
     metadata = json.loads(image_info.read_text(encoding="utf-8"))
     if metadata["sha256"] != sha256(image):
         raise SystemExit("Image checksum mismatch; rebuild the server image.")
@@ -75,7 +77,7 @@ def package():
     # Only deployment files belong in the server archive. This also prevents
     # recursively including server/release while its ZIP is being written.
     deployment_files = [server / name for name in [
-        "Dockerfile", "compose.yaml", "compose.build.yaml", "requirements.txt", ".env.example",
+        "Dockerfile", "compose.yaml", "compose.build.yaml", "compose.panel.yaml", "requirements.txt", ".env.example",
         ".dockerignore", "README.md", "docs/API.md", "build_image.py",
     ]]
     deployment_files.extend(path for path in sorted((server / "app").rglob("*"))
@@ -83,9 +85,9 @@ def package():
                             and path.suffix not in {".pyc", ".pyo"})
     deployment_files.extend(sorted((server / "docs").glob("*.png")))
     assert all(path.is_file() for path in deployment_files), "Missing server deployment files"
-    for directory in [client_root / "release", server / "release"]:
-        directory.mkdir(parents=True, exist_ok=True)
-    package_client(include_portable=True)
+    (server / "release").mkdir(parents=True, exist_ok=True)
+    if not server_only:
+        package_client(include_portable=True)
     server_zip = server / "release" / "FocusLedger-server-docker.zip"
     with zipfile.ZipFile(server_zip, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in deployment_files:
@@ -105,7 +107,9 @@ def package():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--client-only", action="store_true", help="Package the client without touching server releases")
+    targets = parser.add_mutually_exclusive_group()
+    targets.add_argument("--client-only", action="store_true", help="Package the client without touching server releases")
+    targets.add_argument("--server-only", action="store_true", help="Package the server without requiring client builds")
     parser.add_argument("--portable", action="store_true", help="Also publish portable client builds (with --client-only)")
     args = parser.parse_args()
     if args.portable and not args.client_only:
@@ -113,4 +117,4 @@ if __name__ == "__main__":
     if args.client_only:
         package_client(include_portable=args.portable)
     else:
-        package()
+        package(server_only=args.server_only)

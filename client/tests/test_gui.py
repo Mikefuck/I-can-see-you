@@ -18,6 +18,7 @@ from focus_agent.config import Config, load_config
 from focus_agent.store import EventStore
 from focus_agent.tracker import Application, SessionTracker
 from focus_agent.winapi import SystemEventWindow, decrypt
+from focus_agent.process_picker import ProcessPicker
 
 
 APP = Application("Synthetic App", "synthetic.exe")
@@ -140,6 +141,95 @@ def wait_job(app, window):
         app.processEvents()
         time.sleep(0.01)
     assert window.job_thread is None
+
+
+def wait_picker(app, picker):
+    deadline = time.monotonic() + 3
+    while picker.loading and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert not picker.loading
+
+
+def test_process_picker_search_batch_selection_and_existing_translation(make_window):
+    app, build = make_window
+    window = build(app_aliases={"code": "代码编辑器"})
+    choices = [Application("Visual Studio Code", "Code.exe"), Application("浏览器", "chrome.exe"),
+               Application("Visual Studio Code", "Code.exe")]
+    picker = ProcessPicker(window, window.config.app_aliases, loader=lambda: choices)
+    try:
+        wait_picker(app, picker)
+        assert picker.table.rowCount() == 2 and not picker.confirm.isEnabled()
+        picker.search.setText("代码编辑器")
+        assert not picker.table.isRowHidden(0) and picker.table.isRowHidden(1)
+        picker.select_visible()
+        picker.search.setText("CHROME")
+        picker.toggle_row(1, 1)
+        assert len(picker.selected_apps()) == 2
+        picker.search.setText("没有这个应用")
+        assert "没有匹配项" in picker.status.text() and picker.confirm.isEnabled()
+        window.add_process_aliases(picker.selected_apps())
+        assert window.aliases.rowCount() == 2  # Suffix-free existing translations are reused.
+        assert window.collect_aliases() == {"code": "代码编辑器", "chrome.exe": "浏览器"}
+        assert window.dirty
+    finally:
+        picker.close()
+
+
+def test_process_picker_cancel_and_refresh_error_do_not_change_settings(make_window):
+    app, build = make_window
+    window = build()
+    choices = [APP]
+
+    def load():
+        if choices:
+            return list(choices)
+        raise OSError("synthetic process error")
+
+    picker = ProcessPicker(window, {}, loader=load)
+    try:
+        wait_picker(app, picker)
+        picker.select_visible()
+        choices.clear()
+        picker.reload()
+        wait_picker(app, picker)
+        assert "读取失败" in picker.status.text() and picker.refresh_button.isEnabled()
+        assert not picker.confirm.isEnabled()
+        choices.append(APP)
+        picker.reload()
+        wait_picker(app, picker)
+        assert picker.table.rowCount() == 1
+        picker.select_visible()
+        picker.reject()
+        assert window.aliases.rowCount() == 0 and not window.dirty
+    finally:
+        picker.close()
+
+
+def test_saved_alias_refreshes_local_history_without_rewriting_upload_payload(make_window):
+    _, build = make_window
+    window = build()
+    record = {"id": "immutable", "kind": "app_usage", "app_name": "Old name", "process_name": "Code.exe",
+              "started_at": "2026-10-15T01:00:00+00:00", "ended_at": "2026-10-15T01:00:30+00:00", "duration_seconds": 30}
+    window.store.add(window.config, [record])
+    window.add_process_aliases([Application("Visual Studio Code", "Code.exe")])
+    window.aliases.item(0, 1).setText("代码编辑器")
+    window.connection_job(True)
+    window.refresh_history()
+    rows = [window.history.item(row, 0).text() for row in range(window.history.rowCount())]
+    assert "代码编辑器" in rows
+    assert next(event for event, _ in window.store.recent(window.config.destination) if event["id"] == "immutable") == record
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows process enumeration")
+def test_running_processes_include_this_python_process():
+    from pathlib import Path
+    from focus_agent.winapi import ForegroundReader
+    apps = ForegroundReader().running_applications()
+    keys = [item.process_name.casefold() for item in apps]
+    assert Path(sys.executable).name.casefold() in keys
+    assert len(keys) == len(set(keys))
+    assert all(app.app_name and app.process_name for app in apps)
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -419,16 +509,16 @@ def test_system_theme_changes_live_and_manual_choice_takes_priority(make_window,
     window = build()
     hints = app.styleHints()
     hints.colorSchemeChanged.emit(gui.Qt.ColorScheme.Dark)
-    assert window.palette().color(QPalette.ColorRole.Window).name() == "#161616"
-    assert window.key.palette().color(QPalette.ColorRole.Text).name() == "#e8e8e5"
-    assert window.management_panel.username.palette().color(QPalette.ColorRole.Text).name() == "#e8e8e5"
+    assert window.palette().color(QPalette.ColorRole.Window).name() == "#282925"
+    assert window.key.palette().color(QPalette.ColorRole.Text).name() == "#e6e3d5"
+    assert window.management_panel.username.palette().color(QPalette.ColorRole.Text).name() == "#e6e3d5"
     window.theme_actions["light"].trigger()
     hints.colorSchemeChanged.emit(gui.Qt.ColorScheme.Dark)
-    assert window.palette().color(QPalette.ColorRole.Window).name() == "#ffffff"
+    assert window.palette().color(QPalette.ColorRole.Window).name() == "#f6f1df"
     window.theme_actions["system"].trigger()
-    assert window.palette().color(QPalette.ColorRole.Window).name() == "#161616"
+    assert window.palette().color(QPalette.ColorRole.Window).name() == "#282925"
     hints.colorSchemeChanged.emit(gui.Qt.ColorScheme.Light)
-    assert window.palette().color(QPalette.ColorRole.Window).name() == "#ffffff"
+    assert window.palette().color(QPalette.ColorRole.Window).name() == "#f6f1df"
     assert load_config(tmp_path / "config.json", decrypt).theme == "system"
 
 
@@ -443,7 +533,7 @@ def test_theme_saves_before_connection_setup_and_keeps_unfinished_edits(make_win
     assert window.host.text() == "unfinished.example.com" and window.dirty
     assert window.job_thread is None and not window.running and not window.startup_calls
     restored = build(**saved.__dict__)
-    assert restored.palette().color(QPalette.ColorRole.Window).name() == "#161616"
+    assert restored.palette().color(QPalette.ColorRole.Window).name() == "#282925"
     assert restored.theme_actions["dark"].isChecked()
 
 
@@ -484,7 +574,7 @@ def test_theme_save_failure_restores_the_current_choice(make_window, monkeypatch
     monkeypatch.setattr(gui.QMessageBox, "warning", lambda *args: messages.append(args))
     window.theme_actions["dark"].trigger()
     assert window.config.theme == "light" and window.theme_actions["light"].isChecked()
-    assert window.palette().color(QPalette.ColorRole.Window).name() == "#ffffff"
+    assert window.palette().color(QPalette.ColorRole.Window).name() == "#f6f1df"
     assert messages and "read-only configuration" in messages[0][2]
 
 
@@ -502,13 +592,13 @@ def test_theme_repaints_timeline_and_existing_history_without_interrupting_colle
     app.processEvents()
     assert window.running and window.tracker is tracker
     assert len(statuses(window)) == node_count and not window.startup_calls
-    assert initial == "#101010"
-    assert window.history.item(0, 4).foreground().color().name() == "#e8e8e5"
+    assert initial == "#30312c"
+    assert window.history.item(0, 4).foreground().color().name() == "#e6e3d5"
     # The solid baseline comes from a custom QPainter, outside the stylesheet.
     x = window.day.width() // 4 if window.day.x_at(window.day.now) > window.day.width() // 2 else window.day.width() * 3 // 4
     y = window.day.SCALE + window.day.BAR
-    assert before.pixelColor(x, y).name() == "#101010"
-    assert window.day.grab().toImage().pixelColor(x, y).name() == "#e8e8e5"
+    assert before.pixelColor(x, y).name() == "#30312c"
+    assert window.day.grab().toImage().pixelColor(x, y).name() == "#e6e3d5"
 
 
 def test_unconfigured_window_opens_settings_and_history_aliases_switch_page(make_window):

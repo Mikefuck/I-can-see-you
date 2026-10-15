@@ -4,12 +4,12 @@ from PySide6.QtGui import QColor, QPalette
 
 THEME_LABELS = {"system": "跟随系统", "light": "浅色", "dark": "深色"}
 THEMES = {
-    "light": dict(ink="#101010", paper="#ffffff", red="#eb0000", graphite="#5e5e5e",
-                  rule="#d0d0d0", field="#f0f0f0", faded="#a3a3a3", signal="#eb0000",
-                  scrollbar="#c4c4c4"),
-    "dark": dict(ink="#e8e8e5", paper="#161616", red="#ff6b61", graphite="#b0b0ad",
-                 rule="#414141", field="#242424", faded="#858582", signal="#c62b23",
-                 scrollbar="#555555"),
+    "light": dict(ink="#30312c", paper="#f6f1df", red="#eb0000", graphite="#66675c",
+                  rule="#d7d1bd", field="#eee7d0", faded="#8b897d", signal="#eb0000",
+                  scrollbar="#c4bda8", glow_warm=("#e8ca80", .22), glow_pearl=("#fffef5", .78)),
+    "dark": dict(ink="#e6e3d5", paper="#282925", red="#ff6b61", graphite="#bab9ac",
+                 rule="#4b4d43", field="#33352e", faded="#918f82", signal="#c62b23",
+                 scrollbar="#626557", glow_warm=("#d3bd82", .10), glow_pearl=("#e5e7cc", .05)),
 }
 
 

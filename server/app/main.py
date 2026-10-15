@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .board import MAX_SPAN, board, find_person, person_view
 from .config import Settings
 from .database import Database
-from .models import Batch, DeviceStatusEvent, UsageEvent
+from .models import AppAliases, Batch, DeviceStatusEvent, UsageEvent
 from .management import management_router
 from .security import password_hash, token_hash, valid_username, verify_password
 
@@ -103,7 +103,7 @@ def create_app(settings=None):
             with suppress(asyncio.CancelledError):
                 await task
 
-    app = FastAPI(title="Focus Ledger", version="0.2.1", lifespan=lifespan,
+    app = FastAPI(title="Focus Ledger", version="0.2.3", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.database = database
     app.add_middleware(BodyLimit)
@@ -370,7 +370,24 @@ def create_app(settings=None):
     def check(request: Request):
         user = api_user(request)
         return {"ok": True, "account_id": user["id"], "username": user["username"], "schema_version": 1,
-                "features": ["app_usage", "device_status", "management"], "retention_days": database.retention_days}
+                "features": ["app_usage", "device_status", "management", "app_aliases"], "retention_days": database.retention_days}
+
+    @app.put("/api/v1/agent/app-aliases")
+    def sync_app_aliases(body: AppAliases, request: Request):
+        user = api_user(request)
+        device, now = body.device, time.time()
+        device_id = str(device.id)
+        with database.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            owner = db.execute("SELECT user_id FROM devices WHERE id=?", (device_id,)).fetchone()
+            if owner and owner["user_id"] != user["id"]:
+                raise HTTPException(409, "设备已属于其他账户，请在客户端更换设备身份")
+            db.execute("INSERT INTO devices VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                       "name=excluded.name,platform=excluded.platform,agent_version=excluded.agent_version,last_seen=excluded.last_seen",
+                       (device_id, user["id"], device.name, device.platform, device.agent_version, now, now))
+            db.execute("INSERT INTO device_app_aliases VALUES(?,?) ON CONFLICT(device_id) DO UPDATE SET aliases=excluded.aliases",
+                       (device_id, json.dumps(body.app_aliases, ensure_ascii=False)))
+        return {"ok": True, "device_id": device_id, "app_aliases": body.app_aliases}
 
     @app.post("/api/v1/usage/batches")
     def ingest(batch: Batch, request: Request):

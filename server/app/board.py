@@ -5,6 +5,7 @@ day of activity compact. Calendar days are left to the browser, the only side th
 viewer's time zone.
 """
 from collections import defaultdict
+from .aliases import device_aliases, display_name
 
 # The client uploads every 10–300 s (default 30) and sends an empty heartbeat when idle.
 ONLINE_SECONDS = 330
@@ -52,14 +53,16 @@ def devices_of(db, user_ids, cutoff):
 
 def device_summary(db, device, now):
     """Live state of one device, derived from its last contact, last usage and last power event."""
+    aliases = device_aliases(db, device["id"])
     recent = db.execute("SELECT app_name,process_name,started_at,ended_at FROM events WHERE device_id=? "
                         "ORDER BY ended_at DESC LIMIT 1440", (device["id"],))
     last = None
     for row in recent:
+        name = display_name(aliases, row["process_name"], row["app_name"])
         if last is None:
-            last = {"app": row["app_name"], "process": row["process_name"],
+            last = {"app": name, "process": row["process_name"],
                     "since": row["started_at"], "until": row["ended_at"]}
-        elif (row["app_name"], row["process_name"]) == (last["app"], last["process"]) \
+        elif (name, row["process_name"]) == (last["app"], last["process"]) \
                 and last["since"] - row["ended_at"] <= RUN_GAP:
             last["since"] = row["started_at"]
         else:
@@ -99,7 +102,11 @@ def load_runs(db, where, params, start, end):
                       f"WHERE {where} AND ended_at>? AND started_at<? ORDER BY device_id,started_at",
                       [*params, start, end])
     runs = []
+    current_device, aliases = None, {}
     for device, app, process, s, e in rows:
+        if device != current_device:
+            current_device, aliases = device, device_aliases(db, device)
+        app = display_name(aliases, process, app)
         s, e = max(s, start), min(e, end)
         last = runs[-1] if runs else None
         if last and last[0] == device and last[1] == app and last[2] == process and s - last[4] <= RUN_GAP:

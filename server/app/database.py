@@ -1,8 +1,9 @@
+import logging
 import sqlite3
 import time
 from contextlib import contextmanager
 
-from .security import password_hash, valid_username
+from .security import password_hash, valid_username, verify_password
 
 
 SCHEMA = """
@@ -45,6 +46,10 @@ CREATE TABLE IF NOT EXISTS events (
     payload_hash TEXT,
     UNIQUE(user_id, device_id, event_id)
 );
+CREATE TABLE IF NOT EXISTS device_app_aliases (
+    device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+    aliases TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS status_events (
     row_id INTEGER PRIMARY KEY,
     event_id TEXT NOT NULL,
@@ -65,6 +70,10 @@ CREATE INDEX IF NOT EXISTS status_device_time ON status_events(device_id, occurr
 CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS events_expiry ON events(ended_at);
 CREATE TABLE IF NOT EXISTS runtime_settings (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS admin_environment (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    password_hash TEXT NOT NULL
+);
 """
 
 
@@ -96,17 +105,42 @@ class Database:
                 db.execute("ALTER TABLE users ADD COLUMN shared INTEGER NOT NULL DEFAULT 0")
             if "payload_hash" not in {row["name"] for row in db.execute("PRAGMA table_info(events)")}:
                 db.execute("ALTER TABLE events ADD COLUMN payload_hash TEXT")
-            count = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-            if not count:
-                username = self.settings.admin_username
-                if not valid_username(username):
-                    raise ValueError("First start requires ADMIN_USERNAME (3–40 letters, digits, _ . -)")
-                encoded = password_hash(self.settings.admin_password)
-                db.execute(
-                    "INSERT INTO users(username,password_hash,is_admin,created_at) VALUES(?,?,1,?)",
-                    (username, encoded, time.time()),
-                )
+            self._sync_admin(db)
         self.cleanup()
+
+    def _sync_admin(self, db):
+        username, password = self.settings.admin_username, self.settings.admin_password
+        empty = not db.execute("SELECT 1 FROM users LIMIT 1").fetchone()
+        # Existing databases may be operated without environment credentials.
+        if not empty and not username and not password:
+            return
+        if not valid_username(username):
+            raise ValueError("ADMIN_USERNAME is required (3–40 letters, digits, _ . -)")
+        if not 12 <= len(password) <= 256:
+            raise ValueError("ADMIN_PASSWORD must contain 12–256 characters (密码长度须为 12–256 个字符)")
+        if empty:
+            db.execute(
+                "INSERT INTO users(username,password_hash,is_admin,created_at) VALUES(?,?,1,?)",
+                (username, password_hash(password), time.time()),
+            )
+        admin = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+        if not admin or not admin["is_admin"] or not admin["enabled"]:
+            raise ValueError("ADMIN_USERNAME must identify an existing enabled administrator; "
+                             "it cannot rename, promote or re-enable an account")
+        previous = db.execute("SELECT password_hash FROM admin_environment WHERE user_id=?",
+                              (admin["id"],)).fetchone()
+        # Keep a website password change across restarts when Compose is unchanged.
+        if previous and verify_password(password, previous["password_hash"]):
+            return
+        encoded = admin["password_hash"]
+        if not verify_password(password, encoded):
+            encoded = password_hash(password)
+            db.execute("UPDATE users SET password_hash=? WHERE id=?", (encoded, admin["id"]))
+            db.execute("DELETE FROM sessions WHERE user_id=?", (admin["id"],))
+            logging.warning("ADMIN_PASSWORD changed: administrator password synchronized; old sessions revoked")
+        # The last environment value is stored only as a salted password hash.
+        db.execute("INSERT INTO admin_environment VALUES(?,?) ON CONFLICT(user_id) DO UPDATE "
+                   "SET password_hash=excluded.password_hash", (admin["id"], encoded))
 
     @property
     def retention_days(self):
