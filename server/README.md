@@ -1,42 +1,143 @@
 # Linux Docker 服务端 · Focus Ledger
 
-本目录包含服务端接口、数据库、网页、Docker 部署配置、测试、演示工具和发布包。Windows 客户端位于项目的 `client` 目录。
+发布目标：**Linux x86_64 / amd64**（Intel / AMD），镜像标签 `focusledger-server:2026.10.15-r3`。镜像内已包含 Python、服务端依赖和网页，部署时无需安装 Python，也无需联网拉取基础镜像。目标服务器需事先安装 Docker Engine 和 Docker Compose 插件。
 
-## 部署
+## 使用离线发布包（推荐）
 
-将本目录复制到 Linux 服务器，或解压 `release/FocusLedger-server-docker.zip` 后进入其中的 `server` 目录。需要 Docker Engine 和 Compose 插件：
+把 `server/release/FocusLedger-server-docker.zip` 上传至服务器。该包包含可直接导入的镜像、配置示例、本教程和源码。
 
 ```bash
+unzip FocusLedger-server-docker.zip
+cd server
+sha256sum -c IMAGE-SHA256SUMS.txt
+docker load -i FocusLedger-server-linux-amd64.tar
 cp .env.example .env
 nano .env
-docker compose up -d --build
-docker compose logs -f server
 ```
 
-在 `.env` 中填写 `ADMIN_USERNAME` 和至少 12 个字符的 `ADMIN_PASSWORD`。默认网页端口为 `8080`，可用 `SERVER_PORT` 修改；`RETENTION_DAYS` 支持 1–365 天。管理员仅在首次创建数据库时初始化，已有数据库的密码不会被环境变量覆盖。
+必须填写 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD`，密码至少 12 个字符。建议把密码用英文单引号包起来，例如 `ADMIN_PASSWORD='你自己设置的长密码'`，避免密码中的 `$` 被 Compose 当作变量。不要把 `.env` 分享给其他人。
 
-1. 打开 `http://服务器IP:8080`，使用管理员账户登录。
-2. 在「成员」创建用户。
-3. 用户登录自己的账户，在「账户」生成上传密钥，填写到对应客户端中。密钥原文只显示一次。
-4. 记录默认只有本人能看到。成员在「账户」页打开「公开」后，其他成员才能在总览和成员记录里看到对方的设备与使用情况；随时可以关闭。管理员同样只能看到已公开的记录。
+```bash
+docker compose up -d
+docker compose ps
+docker compose logs --tail=100 server
+```
 
-公网部署请配置 HTTPS 反向代理并设置 `SECURE_COOKIES=true`；内网 HTTP 使用时保持 `SECURE_COOKIES=false`。客户端填写证书匹配的域名和反向代理端口。反向代理转发到容器的 8080 端口，上传包限制至少 2 MiB。
+等待状态变为 `healthy`，然后打开 `http://服务器IP:8080`。检查接口可执行 `curl -f http://127.0.0.1:8080/healthz`。首次启动会创建管理员；已有数据库时，修改 `.env` 不会覆盖原管理员密码。
 
-数据库保存在 Docker 命名卷 `focus-data`。`docker compose down` 保留数据，**`docker compose down -v` 会删除数据**。
+如果直接使用本项目源码目录和单独的镜像文件，则在项目的 `server` 目录执行 `docker load -i release/FocusLedger-server-linux-amd64.tar`，之后同样复制 `.env.example`、修改 `.env` 并启动。
 
-## 开发文件
+`FocusLedger-server-linux-amd64.tar` 才是 `docker load` 的输入，不能把外层 ZIP 直接交给 Docker。默认 Compose 使用本地镜像且禁止自动拉取；不需要加 `--build`。
 
-- `app/`：接口、数据库、鉴权与网页。`app/board.py` 是网页的读模型（谁能被看到、设备当前状态、使用时段与分箱）；模板在 `app/templates`，样式与脚本在 `app/static`。页面由模板给出骨架，时刻表和图表由 `app/static/app.js` 按浏览器时区绘制，数据来自 `/api/web/*`（需要登录会话）。
-- 网页的内容安全策略是 `default-src 'self'`：模板和脚本里不能写内联 `<style>`、`style=`、事件属性或内联脚本，脚本也不使用 `innerHTML`，测试会检查这些约束。
-- `requirements.txt`：服务端运行依赖。
-- `Dockerfile`、`compose.yaml`、`.env.example`：部署配置。
-- `tests/`：服务端测试和真实 HTTP 客户端上传联调测试。
-- `tools/demo_server.py`：使用合成记录的本机演示服务。
-- `docs/API.md`：客户端接收协议；同目录还保存网页预览图片。
-- `release/`：服务端部署包与 `SHA256SUMS.txt`。
+## 配置说明
 
-在项目根目录安装 `requirements-dev.txt` 后，执行 `python -m pytest server/tests`。联调测试需要两端依赖。
+| 变量 | 用途 |
+| --- | --- |
+| `ADMIN_USERNAME` | 首次初始化的管理员用户名，默认示例为 `admin` |
+| `ADMIN_PASSWORD` | 首次初始化的管理员密码，必须自行填写，至少 12 个字符 |
+| `FOCUSLEDGER_IMAGE` | 本地镜像标签，默认 `focusledger-server:2026.10.15-r3` |
+| `SERVER_PORT` | 对外端口，默认 `8080`；容器内部始终使用 `8080` |
+| `BIND_HOST` | 监听地址，默认 `0.0.0.0`；同机反向代理可设置 `127.0.0.1` |
+| `RETENTION_DAYS` | 初始数据保留天数，1–365，默认 365；客户端管理页保存后以数据库中的值为准 |
+| `SECURE_COOKIES` | 内网 HTTP 为 `false`，HTTPS 部署为 `true` |
 
-本机演示命令为 `python server/tools/demo_server.py`，访问 `http://127.0.0.1:8765`，管理员账户为 `demo`，密码为 `preview-only-123456`；另有成员 `alice`、`bob`（已公开）和 `carol`（未公开，演示管理员也看不到），密码相同。每次启动都会按当前时间重建演示数据库（位于项目根目录 `.runtime/demo`），其中几台设备处于使用中、空闲、休眠、关机等各种状态，并且「使用中」的设备会持续上报，可以直接看到总览自动刷新。
+公网部署请配置有效的 HTTPS 证书和反向代理，将整个站点转发到容器 8080 端口，允许至少 2 MiB 上传。客户端填写证书匹配的域名，协议选 `https`、端口通常为 `443`。如直接对外使用 8080 端口，需在服务器防火墙 / 云安全组放行所选端口。
 
-在项目根目录执行 `python tools/package_release.py` 可重新生成两端发布包，服务端压缩包只包含部署所需文件，不包含本地数据、环境密钥、测试或已有发布包。
+## 创建用户并连接客户端
+
+1. 用管理员账号登录网页，在「成员」创建用户。
+2. 每位用户登录自己的账户，在「账户」生成上传密钥。密钥原文只显示一次，请当场复制。
+3. 在 Windows 客户端填写服务器 IP / 域名、端口、协议、上传密钥和设备名称；保存通过验证后开始采集。地址框只填写 IP 或域名，不包含 `http://`、端口或路径。
+4. 记录默认只有本人能看到。成员在「账户」打开「公开」后，其他成员才能看到其设备与记录；随时可以关闭。管理员同样只能查看其他成员已公开的记录。
+
+0.2.0 起也可在 Windows 客户端的「服务端」页登录，管理员可创建、启用 / 停用用户并修改数据保留天数；普通成员可生成自己的上传密钥并自动填入连接设置。管理会话独立于上传密钥，密码不保存在客户端。缩短保留期会立即清理超期数据，新的天数保存到数据库，服务重启后仍然生效。
+
+客户端管理页中的端口 / 证书说明不会改动 Docker 或反向代理；这些部署参数仍需在服务器侧配置。既有数据库会自动补齐管理配置表和事件摘要字段，旧账户与记录保留。
+
+## 停止、更新与备份
+
+```bash
+docker compose logs -f --tail=100 server  # 查看日志，Ctrl+C 只退出日志查看
+docker compose stop                    # 停止服务，保留容器和数据
+docker compose start                   # 恢复服务
+docker compose down                    # 删除容器，保留数据卷
+docker compose up -d                   # 重新创建并启动
+```
+
+数据库保存在 `focus-data` 命名卷，实际名称通常为 `server_focus-data`，以 `docker volume ls` 为准。**`docker compose down -v` 会删除数据库。** 容器以 UID 10001 的普通用户运行；默认根文件系统只读，数据卷可写。保持同一个部署目录和 Compose 项目名称，更新才能继续使用原数据卷。
+
+升级时先备份，把新的镜像导入，在 `.env` 中将 `FOCUSLEDGER_IMAGE` 改成新发布的标签，再执行：
+
+```bash
+docker load -i 新版本镜像.tar
+docker compose up -d --force-recreate
+docker compose ps
+```
+
+保留原 `.env`，不要用示例文件覆盖。更新前暂停写入并复制数据库目录做一致性备份：
+
+```bash
+docker compose stop server
+mkdir -p backups
+backup_dir="backups/$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$backup_dir"
+docker compose cp server:/data/. "$backup_dir/"
+docker compose start server
+```
+
+请妥善保存备份目录，并按相同的最长一年保留策略清理备份。备份失败时，也要执行 `docker compose start server` 恢复服务。
+
+## 从源码构建与导出镜像
+
+在项目的 `server` 目录操作，需要联网下载基础镜像与依赖。默认 `compose.yaml` 用于离线部署；源码构建需要叠加构建配置：
+
+```bash
+cp .env.example .env  # 已有 .env 时不要执行此行
+nano .env
+docker compose -f compose.yaml -f compose.build.yaml up -d --build
+```
+
+只构建并导出镜像，无需先配置管理员密码：
+
+```bash
+python3 build_image.py
+```
+
+Windows 安装 Docker Desktop 并切换至 Linux 容器后，也可以执行 `python build_image.py`。脚本需要 Python 3.11 或更新版本，输出到 `release/FocusLedger-server-linux-amd64.tar`，同时生成 `image-info.json` 和 `IMAGE-SHA256SUMS.txt`。
+
+不使用 Python 脚本时，等效核心命令为：
+
+```bash
+docker build --platform linux/amd64 -t focusledger-server:2026.10.15-r3 .
+mkdir -p release
+docker save -o release/FocusLedger-server-linux-amd64.tar focusledger-server:2026.10.15-r3
+```
+
+本项目联合发布工具还需要镜像元信息和校验文件，因此重新生成完整 ZIP 时请使用 `build_image.py`。两端都构建完成后，在项目根目录执行 `python tools/package_release.py`。
+
+## 网页主题
+
+网页默认跟随当前电脑或手机的系统深浅色，系统切换时自动更新。每个页面（包括登录页）右上角的主题按钮可选「跟随系统 / 浅色 / 深色」；窄屏上显示为半圆图标。手动选择立即生效，保存在当前浏览器中，刷新、重新登录和再次打开后仍有效，同一浏览器的其他标签页也会同步。不跨设备或与 Windows 客户端同步。
+
+深色模式覆盖时钟、时刻表、图表、表格和表单。浏览器禁用本地存储时，主题仍可切换，但刷新后会恢复跟随系统。
+
+深色预览：[电脑](docs/server-dark-preview.png)、[手机](docs/server-dark-mobile-preview.png)。
+
+## 常见问题
+
+- **找不到镜像 / pull access denied**：先执行 `docker load`，再用 `docker image ls` 确认标签与 `.env` 中的 `FOCUSLEDGER_IMAGE` 完全一致。
+- **端口被占用**：修改 `.env` 中的 `SERVER_PORT` 后执行 `docker compose up -d`，客户端端口也要同步修改。
+- **网页无法打开**：检查 `docker compose ps`、日志、防火墙和云安全组；确认访问的是服务器 IP。
+- **登录一直返回登录页**：内网 HTTP 部署不要启用 `SECURE_COOKIES=true`；HTTPS 部署检查反向代理和证书。
+- **改环境变量后密码没变**：环境变量只负责首次创建管理员，已有账户在网页中修改密码。
+- **exec format error**：确认服务器为 x86_64；此发布包不适用于 ARM64。
+
+## 开发与验证
+
+`app/` 包含接口、数据库、鉴权和网页；网页读模型在 `app/board.py`，模板在 `app/templates`，静态文件在 `app/static`。内容安全策略禁止内联脚本、内联样式和事件属性，脚本不用 `innerHTML`。协议见 [docs/API.md](docs/API.md)。
+
+在完整项目根目录安装 `requirements-dev.txt` 后，运行 `python -m pytest server/tests`；其中 `test_upload_integration.py` 验证真实 HTTP 客户端上传，需要两端依赖。
+
+本机演示可在项目根目录运行 `python server/tools/demo_server.py`，访问 `http://127.0.0.1:8765`，管理员为 `demo`，密码为 `preview-only-123456`。该工具使用合成数据，会重建 `.runtime/demo` 中的演示数据库，不用于正式部署。
+
+本次发布验证与限制见根项目 `docs/VALIDATION.md`。Docker 导入命令的官方说明见 [docker image load](https://docs.docker.com/reference/cli/docker/image/load/)。

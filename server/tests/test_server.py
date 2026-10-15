@@ -432,14 +432,14 @@ def test_pages_obey_the_content_security_policy(authorized):
             assert "src=" in tag or 'type="application/json"' in tag, (url, tag)
     policy = client.get("/healthz").headers["Content-Security-Policy"]
     assert "script-src 'self'" in policy and "style-src 'self'" in policy
-    script = (APP / "static" / "app.js").read_text(encoding="utf-8")
+    script = "\n".join((APP / "static" / name).read_text(encoding="utf-8") for name in ("app.js", "theme.js"))
     for unsafe in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("):
         assert unsafe not in script, unsafe
     assert 'setAttribute("style"' not in script
 
 
 def test_static_assets_are_served_and_revalidated(client):
-    for name, marker in (("style.css", "--paper"), ("app.js", "use strict"), ("mark.svg", "<svg")):
+    for name, marker in (("style.css", "--paper"), ("app.js", "use strict"), ("theme.js", "use strict"), ("mark.svg", "<svg")):
         response = client.get("/static/" + name)
         assert response.status_code == 200 and marker in response.text, name
         assert response.headers["Cache-Control"] == "no-cache", name
@@ -449,6 +449,19 @@ def test_static_assets_are_served_and_revalidated(client):
     # Anything behind a login, and the login page itself, is never stored.
     assert client.get("/login").headers["Cache-Control"] == "no-store"
     assert client.get("/api/web/board").headers["Cache-Control"] == "no-store"
+
+
+def test_theme_switch_is_available_on_login_records_and_error_pages(authorized):
+    client, _ = authorized
+    for url in ("/", "/settings", "/admin/users", "/people/admin", "/nowhere"):
+        page = client.get(url, headers={"accept": "text/html"}).text
+        assert page.count('data-theme-picker') == 1, url
+        for mode in ("system", "light", "dark"):
+            assert f'data-theme-option="{mode}"' in page, url
+        # A blocking external script restores the theme before the first stylesheet can paint.
+        assert page.index('/static/theme.js') < page.index('/static/style.css')
+    client.cookies.clear()
+    assert 'data-theme-picker' in client.get("/login").text
 
 
 def test_browsers_get_error_pages_and_devices_keep_json(authorized):

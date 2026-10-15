@@ -19,6 +19,7 @@ class Config:
     account_id: int = 0
     username: str = ""
     device_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    device_ids: dict = field(default_factory=dict)
     device_name: str = field(default_factory=socket.gethostname)
     startup: bool = False
     silent_start: bool = False
@@ -29,6 +30,7 @@ class Config:
     upload_on_shutdown: bool = True
     upload_on_suspend: bool = True
     app_aliases: dict = field(default_factory=dict)
+    theme: str = "system"
 
     @property
     def base_url(self):
@@ -48,7 +50,16 @@ class Config:
         """Device-status records (battery and startup/shutdown/sleep/resume) are produced at all."""
         return self.battery_enabled or self.upload_on_shutdown or self.upload_on_suspend
 
-    def validate(self):
+    def bind_account(self, account_id, username, device_id=None):
+        from dataclasses import replace
+        bound = replace(self, account_id=account_id, username=username, device_ids=dict(self.device_ids))
+        bound.device_id = device_id or bound.device_ids.get(bound.destination) or (
+            self.device_id if not self.device_ids and self.account_id == account_id else str(uuid.uuid4()))
+        uuid.UUID(bound.device_id)
+        bound.device_ids[bound.destination] = bound.device_id
+        return bound
+
+    def validate_endpoint(self):
         self.host = self.host.strip().strip("[]")
         try:
             ipaddress.ip_address(self.host)
@@ -57,6 +68,11 @@ class Config:
                 raise ValueError("服务器地址须为 IP 或域名，请勿包含协议、端口或路径")
         if not 1 <= self.port <= 65535 or self.protocol not in {"http", "https"}:
             raise ValueError("端口须为 1–65535，协议须为 HTTP 或 HTTPS")
+
+    def validate(self):
+        self.validate_endpoint()
+        if self.theme not in ("system", "light", "dark"):
+            raise ValueError("主题须为跟随系统、浅色或深色")
         if not 32 <= len(self.api_key) <= 256 or any(c.isspace() for c in self.api_key):
             raise ValueError("请填写网页中生成的完整上传密钥")
         if not 1 <= len(self.device_name.strip()) <= 100:
@@ -82,6 +98,12 @@ class Config:
             aliases[process] = display_name
         self.app_aliases = aliases
         uuid.UUID(self.device_id)
+        if not isinstance(self.device_ids, dict):
+            raise ValueError("设备身份配置无效")
+        for destination, identity in self.device_ids.items():
+            if not isinstance(destination, str) or not re.fullmatch(r"[0-9a-f]{64}", destination):
+                raise ValueError("设备身份配置无效")
+            uuid.UUID(identity)
 
 
 def data_directory():
@@ -95,6 +117,8 @@ def load_config(path, decrypt):
     encrypted = raw.pop("protected_api_key", "")
     allowed = Config.__dataclass_fields__.keys()
     config = Config(**{k: v for k, v in raw.items() if k in allowed and k != "api_key"})
+    if config.theme not in ("system", "light", "dark"):
+        config.theme = "system"
     try:
         config.api_key = decrypt(encrypted) if encrypted else ""
     except (OSError, ValueError):
@@ -103,6 +127,8 @@ def load_config(path, decrypt):
         config.api_key = ""
     if config.configured:
         config.validate()
+    if config.host and config.account_id:
+        config.device_ids[config.destination] = config.device_id
     return config
 
 

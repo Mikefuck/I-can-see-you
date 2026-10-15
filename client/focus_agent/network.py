@@ -65,11 +65,20 @@ def request_json(config, path, body=None):
 
 def check_connection(config):
     result = request_json(config, "/api/v1/agent/check")
-    if result.get("schema_version") != 1 or not isinstance(result.get("account_id"), int):
+    if (not isinstance(result, dict) or result.get("schema_version") != 1 or
+            type(result.get("account_id")) is not int or result["account_id"] <= 0 or
+            not isinstance(result.get("username"), str) or not result["username"] or
+            type(result.get("retention_days")) is not int or not 1 <= result["retention_days"] <= 365):
         raise RuntimeError("服务器接口版本不兼容")
     if config.status_enabled and "device_status" not in result.get("features", []):
         raise RuntimeError("服务器不支持电池和关机状态，请先升级服务端")
-    return result
+    bound = config.bind_account(result["account_id"], result["username"])
+    response = request_json(bound, "/api/v1/usage/batches", {
+        "schema_version": 1, "device": {"id": bound.device_id, "name": bound.device_name,
+        "platform": "windows", "agent_version": __version__}, "events": []})
+    if not isinstance(response, dict) or response.get("acknowledged_ids") != []:
+        raise RuntimeError("服务器未确认设备上传测试，请检查上传接口")
+    return {**result, "device_id": bound.device_id, "upload_verified": True}
 
 
 class Uploader:

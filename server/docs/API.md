@@ -11,7 +11,7 @@ Authorization: Bearer 用户在网页生成的上传密钥
 `GET /api/v1/agent/check` 返回：
 
 ```json
-{"ok":true,"account_id":1,"username":"alice","schema_version":1,"features":["app_usage","device_status"],"retention_days":365}
+{"ok":true,"account_id":1,"username":"alice","schema_version":1,"features":["app_usage","device_status","management"],"retention_days":365}
 ```
 
 `account_id` 在当前服务器中稳定，用于客户端绑定队列；上传归属以服务端根据密钥查出的用户为准，不信任客户端提供的用户信息。
@@ -87,6 +87,23 @@ Authorization: Bearer 用户在网页生成的上传密钥
 | 422 | 数据格式无效、持续时间不符、时间不含时区、设备时钟超前超过5分钟 |
 
 `GET /healthz` 不需要鉴权，仅用于容器健康检查，不返回账户或设备信息。
+
+## 客户端管理接口（0.2.0）
+
+管理接口前缀为 `/api/v1/management`，使用独立的登录 Cookie 会话，**上传 Bearer 密钥不授予管理权限**。所有请求 / 响应使用 JSON。登录后的修改操作必须携带登录返回的 `X-CSRF-Token`；会话有效期 12 小时。公网使用 HTTPS。
+
+| 方法及路径 | 权限与参数 |
+| --- | --- |
+| `POST /login` | 请求头 `X-FocusLedger-Client: desktop`，正文 `username`、`password`；返回 `account_id`、`username`、`is_admin`、`csrf`，设置 HttpOnly 登录 Cookie。 |
+| `POST /logout` | 当前登录账户，注销当前会话。 |
+| `GET /users` | 管理员，返回 `users` 列表，仅含 `id`、`username`、`is_admin`、`enabled`。 |
+| `POST /users` | 管理员，正文 `username`、`password`、`is_admin`；新用户默认不公开。 |
+| `PATCH /users/{id}` | 管理员，正文 `enabled`；不能停用自己。停用会注销目标用户全部会话并作废上传密钥。 |
+| `GET /settings` | 管理员，返回 `retention_days`、只读的 `secure_cookies`、协议版本和管理版本。 |
+| `PUT /settings` | 管理员，正文 `retention_days`（整数 1–365）；持久化并立即清理超期数据，返回生效配置。 |
+| `POST /token` | 当前登录账户，返回新的 `api_key`、`account_id`、`username`，旧上传密钥立即失效。 |
+
+未登录返回 401；权限不足或 CSRF 不符返回 403；用户名冲突返回 409；字段无效返回 422。端口映射、证书和 Docker 重启不在此 API 的修改范围内。
 
 ## 多平台扩展约定
 

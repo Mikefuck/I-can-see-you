@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS events (
     started_at REAL NOT NULL,
     ended_at REAL NOT NULL,
     duration_seconds REAL NOT NULL,
+    payload_hash TEXT,
     UNIQUE(user_id, device_id, event_id)
 );
 CREATE TABLE IF NOT EXISTS status_events (
@@ -63,6 +64,7 @@ CREATE INDEX IF NOT EXISTS status_owner_time ON status_events(user_id, occurred_
 CREATE INDEX IF NOT EXISTS status_device_time ON status_events(device_id, occurred_at);
 CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS events_expiry ON events(ended_at);
+CREATE TABLE IF NOT EXISTS runtime_settings (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
 """
 
 
@@ -92,6 +94,8 @@ class Database:
             # Databases created before opt-in sharing keep every account private.
             if "shared" not in {row["name"] for row in db.execute("PRAGMA table_info(users)")}:
                 db.execute("ALTER TABLE users ADD COLUMN shared INTEGER NOT NULL DEFAULT 0")
+            if "payload_hash" not in {row["name"] for row in db.execute("PRAGMA table_info(events)")}:
+                db.execute("ALTER TABLE events ADD COLUMN payload_hash TEXT")
             count = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
             if not count:
                 username = self.settings.admin_username
@@ -104,8 +108,22 @@ class Database:
                 )
         self.cleanup()
 
+    @property
+    def retention_days(self):
+        with self.connect() as db:
+            row = db.execute("SELECT value FROM runtime_settings WHERE key='retention_days'").fetchone()
+        return row[0] if row else self.settings.retention_days
+
+    def set_retention_days(self, days):
+        if type(days) is not int or not 1 <= days <= 365:
+            raise ValueError("数据保留天数须为 1–365")
+        with self.connect() as db:
+            db.execute("INSERT INTO runtime_settings VALUES('retention_days',?) "
+                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (days,))
+        self.cleanup()
+
     def cutoff(self):
-        return time.time() - self.settings.retention_days * 86400
+        return time.time() - self.retention_days * 86400
 
     def cleanup(self):
         cutoff = self.cutoff()

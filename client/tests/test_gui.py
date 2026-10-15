@@ -2,6 +2,7 @@ import ctypes
 import os
 import sys
 import time
+import threading
 from ctypes import wintypes
 from queue import Queue
 
@@ -10,7 +11,9 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QPalette
 from focus_agent import gui
+from focus_agent import management_ui
 from focus_agent.config import Config, load_config
 from focus_agent.store import EventStore
 from focus_agent.tracker import Application, SessionTracker
@@ -129,6 +132,133 @@ def test_gui_controls_and_verified_account_switch(make_window, monkeypatch, tmp_
     window.toggle_collection()
     assert window.running
     window.upload_now()
+
+
+def wait_job(app, window):
+    deadline = time.monotonic() + 4
+    while window.job_thread is not None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert window.job_thread is None
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_verification_locks_settings_and_restores_controls(make_window, monkeypatch, fail):
+    app, build = make_window
+    window = build()
+    entered, release = threading.Event(), threading.Event()
+
+    def verify(config):
+        entered.set()
+        assert release.wait(3)
+        if fail:
+            raise RuntimeError("synthetic offline")
+        return {"account_id": 1, "username": "alice", "retention_days": 365}
+
+    monkeypatch.setattr(gui, "check_connection", verify)
+    window.host.setText("server-a.example.com")
+    window.mark_dirty()
+    window.connection_job(True)
+    try:
+        assert entered.wait(2)
+        assert not window.host.isEnabled()
+        assert not window.key.isEnabled()
+        assert not window.port.isEnabled()
+        # The history page remains accessible, but its alias shortcut must not alter the locked form.
+        name = gui.QTableWidgetItem("Synthetic App")
+        name.setData(gui.Qt.ItemDataRole.UserRole, "app_usage")
+        window.history.setRowCount(1)
+        window.history.setItem(0, 0, name)
+        window.history.setItem(0, 1, gui.QTableWidgetItem("synthetic.exe"))
+        rows = window.aliases.rowCount()
+        window.alias_from_history(0, 0)
+        assert window.aliases.rowCount() == rows
+    finally:
+        release.set()
+    wait_job(app, window)
+    assert window.host.isEnabled() and window.key.isEnabled() and window.save_button.isEnabled()
+    assert window.config.host == ("127.0.0.1" if fail else "server-a.example.com")
+    assert window.dirty == fail
+
+
+def test_returning_to_account_restores_original_device_after_test_and_save(make_window, monkeypatch):
+    app, build = make_window
+    window = build()
+    original = window.config
+    monkeypatch.setattr(gui, "check_connection", lambda config: {"account_id": 2 if config.api_key.startswith("y") else 1,
+        "username": "bob" if config.api_key.startswith("y") else "alice", "retention_days": 365})
+    window.key.setText("y" * 43)
+    window.connection_job(False)
+    wait_job(app, window)
+    tested_id = window.config.device_ids[window.job_candidate.bind_account(2, "bob").destination]
+    window.connection_job(True)
+    wait_job(app, window)
+    assert window.config.device_id == tested_id
+    window.key.setText(original.api_key)
+    window.connection_job(True)
+    wait_job(app, window)
+    assert window.config.device_id == original.device_id
+    assert window.config.destination == original.destination
+
+
+def test_management_page_login_create_and_save_runtime(make_window, monkeypatch):
+    app, build = make_window
+    window = build(account_id=0, api_key="", username="")
+    panel = window.management_panel
+    calls = []
+
+    class Session:
+        def __init__(self, config):
+            self.base_url = config.base_url
+            self.user = None
+            self.days = 365
+            self.users = [{"id": 1, "username": "admin", "is_admin": True, "enabled": True}]
+
+        def login(self, username, password):
+            calls.append(("login", username, password))
+            self.user = {"account_id": 1, "username": username, "is_admin": True}
+            return self.user
+
+        def overview(self):
+            return {"users": list(self.users), "settings": {"retention_days": self.days, "secure_cookies": False}}
+
+        def request(self, path, body, method):
+            calls.append((path, body, method))
+            if path == "/users":
+                self.users.append({"id": 2, "username": body["username"], "is_admin": False, "enabled": True})
+            elif path == "/settings":
+                self.days = body["retention_days"]
+            return {}
+
+    def wait():
+        deadline = time.monotonic() + 3
+        while panel.thread is not None and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(0.01)
+        assert panel.thread is None
+
+    monkeypatch.setattr(management_ui, "ManagementSession", Session)
+    window.show_page(window.MANAGEMENT)
+    assert not panel.admin.isEnabled()
+    panel.username.setText("admin")
+    panel.password.setText("test-password-123")
+    panel.login()
+    wait()
+    assert panel.admin.isEnabled()
+    assert panel.password.text() == ""
+    assert panel.users.rowCount() == 1
+    panel.new_username.setText("alice")
+    panel.new_password.setText("test-password-456")
+    panel.create_user()
+    wait()
+    assert panel.users.rowCount() == 2
+    assert panel.new_password.text() == ""
+    monkeypatch.setattr(gui.QMessageBox, "question", lambda *args: gui.QMessageBox.StandardButton.Yes)
+    panel.retention.setValue(30)
+    panel.save_settings()
+    wait()
+    assert panel.retention_days == 30
+    assert ("/settings", {"retention_days": 30}, "PUT") in calls
 
 
 def test_startup_node_is_recorded_once_per_program_start(make_window):
@@ -282,6 +412,103 @@ def test_settings_edits_are_flagged_until_saved(make_window):
     assert window.dirty and window.settings_tab.flagged and not window.unsaved.isHidden()
     window.connection_job(True)
     assert not window.dirty and not window.settings_tab.flagged and window.unsaved.isHidden()
+
+
+def test_system_theme_changes_live_and_manual_choice_takes_priority(make_window, tmp_path):
+    app, build = make_window
+    window = build()
+    hints = app.styleHints()
+    hints.colorSchemeChanged.emit(gui.Qt.ColorScheme.Dark)
+    assert window.palette().color(QPalette.ColorRole.Window).name() == "#161616"
+    assert window.key.palette().color(QPalette.ColorRole.Text).name() == "#e8e8e5"
+    assert window.management_panel.username.palette().color(QPalette.ColorRole.Text).name() == "#e8e8e5"
+    window.theme_actions["light"].trigger()
+    hints.colorSchemeChanged.emit(gui.Qt.ColorScheme.Dark)
+    assert window.palette().color(QPalette.ColorRole.Window).name() == "#ffffff"
+    window.theme_actions["system"].trigger()
+    assert window.palette().color(QPalette.ColorRole.Window).name() == "#161616"
+    hints.colorSchemeChanged.emit(gui.Qt.ColorScheme.Light)
+    assert window.palette().color(QPalette.ColorRole.Window).name() == "#ffffff"
+    assert load_config(tmp_path / "config.json", decrypt).theme == "system"
+
+
+def test_theme_saves_before_connection_setup_and_keeps_unfinished_edits(make_window, tmp_path):
+    _, build = make_window
+    window = build(account_id=0, username="", api_key="", theme="light")
+    window.host.setText("unfinished.example.com")
+    window.mark_dirty()
+    window.theme_actions["dark"].trigger()
+    saved = load_config(tmp_path / "config.json", decrypt)
+    assert saved.theme == "dark" and saved.host == "127.0.0.1"
+    assert window.host.text() == "unfinished.example.com" and window.dirty
+    assert window.job_thread is None and not window.running and not window.startup_calls
+    restored = build(**saved.__dict__)
+    assert restored.palette().color(QPalette.ColorRole.Window).name() == "#161616"
+    assert restored.theme_actions["dark"].isChecked()
+
+
+def test_theme_is_preserved_when_pending_connection_check_finishes(make_window, monkeypatch, tmp_path):
+    app, build = make_window
+    window = build(theme="light")
+    entered, release = threading.Event(), threading.Event()
+
+    def verify(config):
+        entered.set()
+        assert release.wait(3)
+        return {"account_id": 1, "username": "alice", "retention_days": 365}
+
+    monkeypatch.setattr(gui, "check_connection", verify)
+    window.host.setText("new.example.com")
+    window.connection_job(True)
+    try:
+        assert entered.wait(2)
+        window.theme_actions["dark"].trigger()
+        assert window.theme_actions["dark"].isChecked()
+    finally:
+        release.set()
+    wait_job(app, window)
+    saved = load_config(tmp_path / "config.json", decrypt)
+    assert saved.theme == window.config.theme == "dark"
+    assert saved.host == "new.example.com"
+
+
+def test_theme_save_failure_restores_the_current_choice(make_window, monkeypatch):
+    _, build = make_window
+    window = build(theme="light")
+    messages = []
+
+    def fail(*args):
+        raise OSError("read-only configuration")
+
+    monkeypatch.setattr(gui, "save_config", fail)
+    monkeypatch.setattr(gui.QMessageBox, "warning", lambda *args: messages.append(args))
+    window.theme_actions["dark"].trigger()
+    assert window.config.theme == "light" and window.theme_actions["light"].isChecked()
+    assert window.palette().color(QPalette.ColorRole.Window).name() == "#ffffff"
+    assert messages and "read-only configuration" in messages[0][2]
+
+
+def test_theme_repaints_timeline_and_existing_history_without_interrupting_collection(make_window):
+    app, build = make_window
+    window = build(theme="light")
+    window.show()
+    app.processEvents()
+    window.refresh_history()
+    initial = window.history.item(0, 4).foreground().color().name()
+    before = window.day.grab().toImage()
+    node_count = len(statuses(window))
+    tracker = window.tracker
+    window.theme_actions["dark"].trigger()
+    app.processEvents()
+    assert window.running and window.tracker is tracker
+    assert len(statuses(window)) == node_count and not window.startup_calls
+    assert initial == "#101010"
+    assert window.history.item(0, 4).foreground().color().name() == "#e8e8e5"
+    # The solid baseline comes from a custom QPainter, outside the stylesheet.
+    x = window.day.width() // 4 if window.day.x_at(window.day.now) > window.day.width() // 2 else window.day.width() * 3 // 4
+    y = window.day.SCALE + window.day.BAR
+    assert before.pixelColor(x, y).name() == "#101010"
+    assert window.day.grab().toImage().pixelColor(x, y).name() == "#e8e8e5"
 
 
 def test_unconfigured_window_opens_settings_and_history_aliases_switch_page(make_window):

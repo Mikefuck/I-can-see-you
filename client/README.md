@@ -2,23 +2,57 @@
 
 本目录包含 Windows 客户端源码、界面、采集与上传逻辑、测试、预览工具和发布包。服务端单独部署在项目的 `server` 目录。
 
-## 直接使用
+## 安装与使用
 
-源码目录中已打包的程序为 `dist/FocusLedger/FocusLedger.exe`，压缩包位于 `release/FocusLedger-windows-x64.zip`。解压后运行 `FocusLedger/FocusLedger.exe`；请保留并复制整个 `FocusLedger` 文件夹，无需另装 Python。
+支持 Windows 10 / 11 x64，无需安装 Python。推荐下载并双击 **`release/FocusLedger-Setup-windows-x64.exe`**，按中文安装向导完成安装：
+
+1. 默认安装到 `%LOCALAPPDATA%\Programs\FocusLedger`，仅供当前 Windows 用户使用，无需管理员权限；可选择其他安装目录。
+2. 安装后在开始菜单中打开「专注记录」，也可以在安装时勾选创建桌面快捷方式。
+3. 以后运行新版安装包即可覆盖升级，保留配置、上传密钥、设备身份与本地缓存。安装前先从系统托盘右键菜单退出旧程序。
+4. 卸载时打开 Windows「设置 → 应用 → 已安装的应用」（Windows 10 为「应用和功能」），找到「专注记录 · Focus Ledger」并选择卸载；也可以使用开始菜单中的「卸载专注记录」。卸载会删除程序、快捷方式及指向该安装目录的自动启动项。
+
+配置和缓存位于 `%LOCALAPPDATA%\FocusLedger`，升级和卸载均保留。需要彻底清除本机数据时，卸载后手动删除这个目录；其中可能包含尚未上传的记录。旧免安装版与安装版共用该目录，安装时已有的免安装版自动启动路径会迁移到安装目录，并保留 Windows 中的启用 / 禁用状态。确认安装版正常后可删除旧免安装程序。
+
+仍可选择免安装版本：
+
+- **单文件版**：直接运行 `release/FocusLedger.exe`，只复制这一个 EXE 即可。首次启动需要解压内置运行库，可能等待数秒；请放到稳定目录后再设置自动启动。
+- **文件夹版**：解压 `release/FocusLedger-windows-x64.zip`，运行 `FocusLedger/FocusLedger.exe`；保留整个 `FocusLedger` 文件夹及 `_internal` 子目录，不能只复制其中的小 EXE。解压后的 README 与程序文件夹位于同一级。
+
+所有版本共用 `%LOCALAPPDATA%\FocusLedger` 配置与队列，不要同时运行。单文件版构建输出为 `dist/FocusLedger.exe`，文件夹版为 `dist/FocusLedger/FocusLedger.exe`。
 
 1. 在服务端网页创建用户，并在「账户」页生成该用户的上传密钥。
 2. 在客户端「设置」页填写服务器 IP / 域名、端口、HTTP / HTTPS、上传密钥和设备名称。
 3. 点击「保存设置」（或按 Ctrl+S），通过连接验证后点击「开始采集」。
 4. 需要开机启动时勾选「登录 Windows 后自动启动」，然后保存。关闭窗口后程序留在系统托盘，右键托盘可以暂停、上传或退出。
 
+### 在客户端管理服务端（0.2.0）
+
+也可以直接在客户端完成账户接入，无需先用浏览器生成密钥：
+
+1. 在「设置」填写服务器 IP / 域名、端口和协议，然后进入「服务端」页。
+2. 使用服务端用户名和密码登录。管理员可查看和创建用户、启用 / 停用用户，以及修改数据保留天数（1–365 天）；普通成员只能操作自己的上传密钥。
+3. 点击「生成新上传密钥并填入连接设置」，确认后会自动填写密钥、验证账户和设备上传并保存连接。已有密钥会立即失效，其他设备也需更新。
+4. 返回「记录」开始采集。管理登录密码与会话只保留在本次进程内；已保存的上传密钥仍使用 DPAPI 加密。
+
+数据保留天数保存到服务端数据库，立即生效并在重启后保留，优先于 `RETENTION_DAYS` 环境变量。缩短保留期会立即清理超期历史记录，客户端保存前会提示。停用用户会退出该用户的全部网页和客户端管理会话，并作废上传密钥；重新启用后需重新生成密钥。
+
+对外端口、绑定地址在服务端 Docker 部署配置中修改，HTTPS 证书在反向代理中配置；客户端会显示这一说明。公网登录和上传均应使用 HTTPS。
+
+「测试连接」会实际发送空上传包，验证上传路径和设备归属，并登记 / 更新设备心跳。切换账户或服务器后再返回，会复用对应的设备身份。需要配套更新后的服务端才能使用管理页；旧服务端仍可按原方式生成上传密钥。
+
 `FocusLedger.exe --show` 强制显示窗口，`--silent` 强制托盘启动。程序已在运行（包括静默在托盘中）时再次运行它，会打开已有实例的主窗口。移动程序文件夹后，从新位置运行一次即可自动更新开机启动路径；「自动启动」复选框显示 Windows 的实际状态，在任务管理器中被关闭时会提示，重新勾选保存即可恢复。
 
 ### 界面
 
-窗口顶部始终显示采集状态（红色方块表示正在采集，空心方块表示已暂停）以及「开始 / 暂停采集」「立即上传」两个操作。下方分两页：
+右上角「主题」按钮可选「跟随系统 / 浅色 / 深色」，默认跟随 Windows 的应用主题，系统主题变化时立即更新。手动选择即时保存，无需点击「保存设置」或联网，重新启动后仍有效；不会保存尚未提交的连接或采集设置。服务端网页使用所在浏览器自己的主题选择。
 
-- **记录**：今日已记录的时长和一条 24 小时时间轴。黑色块是已记录的时间，红色块和红线是正在进行的记录与此刻，▲ / ▼ 标出开机或唤醒、关机或睡眠；鼠标停在色块上可查看应用和起止时间。下面是当前应用、上传状态、待上传缓存、电池状态和最近 50 条记录。
+深色预览：[记录页](docs/client-dark-preview.png)、[设置页](docs/client-dark-settings-preview.png)。
+
+窗口顶部始终显示采集状态（红色方块表示正在采集，空心方块表示已暂停）以及「开始 / 暂停采集」「立即上传」两个操作。下方分三页：
+
+- **记录**：今日已记录的时长和一条 24 小时时间轴。深色块（深色模式下为浅色块）是已记录的时间，红色块和红线是正在进行的记录与此刻，▲ / ▼ 标出开机或唤醒、关机或睡眠；鼠标停在色块上可查看应用和起止时间。下面是当前应用、上传状态、待上传缓存、电池状态和最近 50 条记录。
 - **设置**：连接、采集选项和应用名翻译。保存栏固定在底部；有未保存的修改时，「设置」标签旁出现红色小方块。
+- **服务端**：账户登录、生成自己的上传密钥，以及管理员用户管理和数据保留天数设置。
 
 配置、日志与 SQLite 队列保存在 `%LOCALAPPDATA%\FocusLedger`，上传密钥使用当前 Windows 账户的 DPAPI 加密；若密钥无法解密（例如换了 Windows 账户），其他设置保留，只需重新填写密钥。只记录前台应用名称、进程名和使用时间；在设置允许时，也记录电池电量、充电状态以及关机 / 睡眠 / 唤醒节点。不采集窗口标题、截图、键盘输入或文件内容。
 
@@ -36,6 +70,8 @@
 
 推荐 Windows 10 / 11 x64、Python 3.12 x64。以下命令在本目录执行：
 
+生成安装包还需要 [Inno Setup](https://jrsoftware.org/isdl.php)（推荐 6.7.3 或更高版本），仅构建电脑需要安装。脚本会查找 PATH、常见安装目录及项目的 `.runtime/inno-setup/ISCC.exe`；也可以用 `-Iscc 'C:\工具\Inno Setup 6\ISCC.exe'` 指定编译器。
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
@@ -43,7 +79,21 @@ python -m venv .venv
 .\build.ps1 -Python (Resolve-Path .venv\Scripts\python.exe).Path
 ```
 
-打包输出为 `dist/FocusLedger`，中间文件位于 `build`。在项目根目录执行 `python tools/package_release.py` 可生成本目录 `release` 下的发布包和 SHA-256 校验文件。
+默认构建文件夹版并生成 **`release/FocusLedger-Setup-windows-x64.exe`**，同时更新 `release/SHA256SUMS.txt`。版本号自动读取 `focus_agent/__init__.py`；固定 AppId 让后续安装包识别同一程序并覆盖升级。中间文件位于 `build`。
+
+- `-Package all`：生成安装包、单文件 EXE 与文件夹版。
+- `-Package portable`：仅生成免安装版本，不需要 Inno Setup；可配合 `-Layout onefile` 或 `-Layout onedir`。
+- 已有完整 `dist/FocusLedger/` 时，可运行 `./build-installer.ps1` 仅重新生成安装包。
+
+如果 PowerShell 阻止执行本地脚本，可仅对本次进程使用 `powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Python .\.venv\Scripts\python.exe`。
+
+只发布客户端时，在项目根目录执行 `python tools/package_release.py --client-only`，不依赖服务端镜像。若还需发布免安装版本，先用 `-Package all` 构建，再执行 `python tools/package_release.py --client-only --portable`。完成两端构建后也可执行 `python tools/package_release.py` 生成联合发布包。校验安装包：
+
+```powershell
+Get-FileHash .\release\FocusLedger-Setup-windows-x64.exe -Algorithm SHA256
+```
+
+将结果与 `release/SHA256SUMS.txt` 对照即可。安装版通过安装包升级、通过系统应用列表卸载。免安装版仍通过替换 EXE / 文件夹更新，删除前先取消自动启动并从托盘退出。
 
 ## 开发文件
 
@@ -51,6 +101,8 @@ python -m venv .venv
 - `tests/`：采集、缓存、配置与 GUI 测试。
 - `tools/preview_client.py`：使用合成记录生成预览，不采集桌面或发送网络请求。
 - `tools/make_icon.py`：生成程序图标（`build.ps1` 打包时自动调用）。
+- `tools/build_executable.py`：隔离 DLL 搜索路径后执行 PyInstaller，避免其他软件的运行库混入发布包。
+- `build-installer.ps1`、`installer/`：Windows 安装包构建脚本、安装 / 卸载规则与中文向导。
 - `docs/`：客户端预览图片。
 
 在项目根目录安装 `requirements-dev.txt` 后，执行 `python -m pytest client/tests`。预览命令为 `python client/tools/preview_client.py`。

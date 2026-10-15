@@ -247,6 +247,27 @@ def test_undecryptable_key_keeps_settings_and_asks_again(tmp_path):
     assert loaded.device_name == "办公室电脑" and loaded.device_id == first.device_id
 
 
+@pytest.mark.parametrize("theme", ["system", "light", "dark"])
+def test_theme_preference_survives_config_roundtrip(tmp_path, theme):
+    path, first = tmp_path / "config.json", config(theme=theme)
+    first.validate()
+    save_config(path, first, lambda text: text)
+    loaded = load_config(path, lambda text: text)
+    assert loaded.theme == theme and loaded.device_id == first.device_id
+    assert loaded.api_key == first.api_key
+
+
+@pytest.mark.parametrize("theme", [None, "invalid", []])
+def test_old_or_unknown_theme_preferences_follow_system(tmp_path, theme):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"theme": theme}), encoding="utf-8")
+    assert load_config(path, lambda text: text).theme == "system"
+    path.write_text("{}", encoding="utf-8")
+    assert load_config(path, lambda text: text).theme == "system"
+    with pytest.raises(ValueError, match="主题"):
+        config(theme=theme).validate()
+
+
 def test_startup_state_respects_task_manager_disable(monkeypatch):
     from focus_agent import winapi
 
@@ -269,11 +290,49 @@ def test_connection_requires_status_capability(monkeypatch):
     })
     with pytest.raises(RuntimeError, match="不支持电池"):
         network.check_connection(config())
-    monkeypatch.setattr(network, "request_json", lambda config, path: {
+    monkeypatch.setattr(network, "request_json", lambda config, path, body=None: {
         "schema_version": 1, "account_id": 1, "username": "alice",
         "features": ["app_usage", "device_status"], "retention_days": 365
-    })
+    } if body is None else {"acknowledged_ids": []})
     assert network.check_connection(config())["account_id"] == 1
+
+
+def test_connection_probe_uses_the_bound_device_and_requires_upload_ack(monkeypatch):
+    from focus_agent import network
+    first = config()
+    bound = first.bind_account(2, "bob")
+    calls = []
+
+    def request(candidate, path, body=None):
+        calls.append((candidate, path, body))
+        if body is None:
+            return {"schema_version": 1, "account_id": 2, "username": "bob", "retention_days": 365,
+                    "features": ["app_usage", "device_status"]}
+        return {"acknowledged_ids": []}
+
+    first.device_ids[bound.destination] = bound.device_id
+    monkeypatch.setattr(network, "request_json", request)
+    result = network.check_connection(first)
+    assert result["upload_verified"]
+    assert result["device_id"] == bound.device_id
+    assert calls[1][1] == "/api/v1/usage/batches"
+    assert calls[1][2]["events"] == []
+    assert calls[1][2]["device"]["id"] == bound.device_id
+    assert first.account_id == 1
+
+
+def test_device_identity_mapping_survives_restart_and_key_rotation(tmp_path):
+    first = config()
+    first.device_ids[first.destination] = first.device_id
+    other = first.bind_account(2, "bob")
+    returned = other.bind_account(1, "alice")
+    assert returned.device_id == first.device_id
+    assert other.device_id != first.device_id
+    path = tmp_path / "config.json"
+    save_config(path, other, lambda text: text)
+    restored = load_config(path, lambda text: text)
+    assert restored.bind_account(1, "alice").device_id == first.device_id
+    assert replace(restored, api_key="y" * 43).bind_account(2, "bob").device_id == other.device_id
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows power API")

@@ -7,3 +7,7 @@ tests
 tools
 docs
 release
+*.tar
+*.tar.gz
+image-info.json
+*SHA256SUMS.txt

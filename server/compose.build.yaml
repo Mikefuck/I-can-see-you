@@ -1,0 +1,5 @@
+# Use together with compose.yaml when building from source.
+services:
+  server:
+    build: .
+    pull_policy: build

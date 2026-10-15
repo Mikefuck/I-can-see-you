@@ -4,6 +4,7 @@ import tempfile
 import time
 import uuid
 import webbrowser
+from urllib.parse import urlsplit
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +13,7 @@ from string import Template
 
 from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QSize, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import (
-    QAction, QColor, QFont, QFontMetrics, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap, QPolygonF, QShortcut,
+    QAction, QActionGroup, QColor, QFont, QFontMetrics, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap, QPolygonF, QShortcut,
 )
 from PySide6.QtWidgets import (
     QAbstractButton, QAbstractItemView, QApplication, QCheckBox, QComboBox, QFrame, QGridLayout,
@@ -24,8 +25,10 @@ from PySide6.QtWidgets import (
 from . import __version__
 from .config import save_config
 from .network import Uploader, check_connection
+from .management_ui import ManagementPanel
 from .store import PENDING, SENT
 from .tracker import SessionTracker
+from .theme import THEME_LABELS, THEMES, colors_for, palette_for
 from .winapi import BatteryReader, ForegroundReader, SystemEventWindow, encrypt, set_startup, startup_enabled
 
 
@@ -52,17 +55,19 @@ MARGIN, LABEL_COLUMN, GUTTER = 32, 148, 24
 
 # QSS can only draw arrows and check marks from files, so these small SVGs are written to a temp directory.
 GLYPHS = {
-    "arrow-up": '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6"><path d="M0 6L5 0L10 6Z" fill="%s"/></svg>' % INK,
-    "arrow-down": '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6"><path d="M0 0L10 0L5 6Z" fill="%s"/></svg>' % INK,
+    "arrow-up": '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6"><path d="M0 6L5 0L10 6Z" fill="{ink}"/></svg>',
+    "arrow-down": '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6"><path d="M0 0L10 0L5 6Z" fill="{ink}"/></svg>',
     "check": '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"><path d="M2 6.5L5 9.5L10.5 2.5" fill="none" '
-             'stroke="%s" stroke-width="2"/></svg>' % PAPER,
+             'stroke="{paper}" stroke-width="2"/></svg>',
 }
 
 
-def glyph_directory():
-    directory = Path(tempfile.gettempdir()) / "focus-ledger-ui"
-    directory.mkdir(exist_ok=True)
-    for name, svg in GLYPHS.items():
+def glyph_directory(colors=None):
+    colors = colors or THEMES["light"]
+    directory = Path(tempfile.gettempdir()) / "focus-ledger-ui" / colors["paper"].lstrip("#")
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, template in GLYPHS.items():
+        svg = template.format(**colors)
         path = directory / (name + ".svg")
         if not path.exists() or path.read_text(encoding="utf-8") != svg:
             path.write_text(svg, encoding="utf-8")
@@ -117,12 +122,16 @@ QPushButton{background:$paper;color:$ink;border:2px solid $ink;border-radius:0;p
 QPushButton:hover{background:$ink;color:$paper;}
 QPushButton:focus{border-color:$red;}
 QPushButton:disabled{color:$faded;border-color:$rule;background:$paper;}
-QPushButton[primary="true"]{background:$red;color:$paper;border-color:$red;}
-QPushButton[primary="true"]:hover{background:$ink;border-color:$ink;}
+QPushButton[primary="true"]{background:$signal;color:#ffffff;border-color:$signal;}
+QPushButton[primary="true"]:hover{background:$ink;color:$paper;border-color:$ink;}
 QPushButton[primary="true"]:focus{border-color:$ink;}
 QPushButton[primary="true"]:disabled{background:$rule;color:$faded;border-color:$rule;}
 QPushButton#link{background:transparent;color:$ink;border:0;padding:2px 0;min-height:0;font-weight:400;text-align:left;text-decoration:underline;}
 QPushButton#link:hover,QPushButton#link:focus{background:transparent;color:$red;}
+QPushButton#themeButton{padding:5px 10px;font-size:12px;font-weight:400;border:1px solid $rule;}
+QPushButton#themeButton:hover{background:$field;color:$ink;border-color:$ink;}
+QPushButton#themeButton:focus{border-color:$red;}
+QPushButton#themeButton::menu-indicator{image:none;}
 
 QCheckBox{spacing:12px;padding:4px 0;}
 QCheckBox::indicator{width:16px;height:16px;border:2px solid $ink;background:$paper;}
@@ -137,10 +146,10 @@ QHeaderView{background:transparent;border:0;}
 QHeaderView::section{background:transparent;color:$graphite;border:0;border-bottom:1px solid $ink;padding:6px 12px 6px 3px;font-size:11px;font-weight:700;}
 
 QScrollBar:vertical{background:transparent;width:8px;margin:0;}
-QScrollBar::handle:vertical{background:#c4c4c4;min-height:36px;}
+QScrollBar::handle:vertical{background:$scrollbar;min-height:36px;}
 QScrollBar::handle:vertical:hover{background:$ink;}
 QScrollBar:horizontal{background:transparent;height:8px;margin:0;}
-QScrollBar::handle:horizontal{background:#c4c4c4;min-width:36px;}
+QScrollBar::handle:horizontal{background:$scrollbar;min-width:36px;}
 QScrollBar::handle:horizontal:hover{background:$ink;}
 QScrollBar::add-line,QScrollBar::sub-line{width:0;height:0;}
 QScrollBar::add-page,QScrollBar::sub-page{background:transparent;}
@@ -152,9 +161,9 @@ QMenu::separator{height:1px;background:$rule;margin:4px 0;}
 """)
 
 
-def stylesheet():
-    return STYLE.substitute(ink=INK, paper=PAPER, red=RED, graphite=GRAPHITE, rule=RULE, field=FIELD, faded=FADED,
-                            glyphs=glyph_directory())
+def stylesheet(colors=None):
+    colors = colors or THEMES["light"]
+    return STYLE.substitute(**colors, glyphs=glyph_directory(colors))
 
 
 def apply_typography(app):
@@ -214,11 +223,12 @@ class StatusLamp(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        colors = colors_for(self)
         if self.state == "stopped":
-            painter.setPen(QPen(QColor(INK), 2))
+            painter.setPen(QPen(QColor(colors["ink"]), 2))
             painter.drawRect(QRectF(1, 1, 20, 20))
         else:
-            painter.fillRect(self.rect(), QColor(RED if self.state == "running" else INK))
+            painter.fillRect(self.rect(), QColor(colors["red"] if self.state == "running" else colors["ink"]))
         painter.end()
 
 
@@ -257,19 +267,20 @@ class NavTab(QAbstractButton):
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        colors = colors_for(self)
         metrics = QFontMetrics(self.font())
         width = metrics.horizontalAdvance(self.text())
         text_height = self.height() - self.BAR
-        color = RED if self.hasFocus() else INK if self.isChecked() or self.underMouse() else GRAPHITE
+        color = colors["red"] if self.hasFocus() else colors["ink"] if self.isChecked() or self.underMouse() else colors["graphite"]
         painter.setFont(self.font())
         painter.setPen(QColor(color))
         painter.drawText(QRectF(0, 0, width + 2, text_height), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                          self.text())
         if self.isChecked():
-            painter.fillRect(QRectF(0, text_height, width, self.BAR), QColor(INK))
+            painter.fillRect(QRectF(0, text_height, width, self.BAR), QColor(colors["ink"]))
         if self.flagged:
             top = (text_height - metrics.capHeight()) / 2 - 1
-            painter.fillRect(QRectF(width + 3, top, 6, 6), QColor(RED))
+            painter.fillRect(QRectF(width + 3, top, 6, 6), QColor(colors["red"]))
         painter.end()
 
 
@@ -334,33 +345,34 @@ class DayStrip(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        colors = colors_for(self)
         width = self.width() - 1
         top, bottom = self.SCALE, self.SCALE + self.BAR
         painter.setFont(self.figures)
         for hour in range(25):
             x = round(hour * width / 24)
             if hour % 3:
-                painter.fillRect(x, top, 1, self.BAR, QColor(RULE))
+                painter.fillRect(x, top, 1, self.BAR, QColor(colors["rule"]))
                 continue
-            painter.fillRect(x, 2, 1, bottom - 2, QColor(FADED))
+            painter.fillRect(x, 2, 1, bottom - 2, QColor(colors["faded"]))
             text = QRectF(x + 4, 0, 30, top - 4) if hour < 24 else QRectF(x - 34, 0, 30, top - 4)
             align = Qt.AlignmentFlag.AlignLeft if hour < 24 else Qt.AlignmentFlag.AlignRight
-            painter.setPen(QColor(GRAPHITE))
+            painter.setPen(QColor(colors["graphite"]))
             painter.drawText(text, align | Qt.AlignmentFlag.AlignTop, str(hour))
         for start, end, live in self.blocks():
             left = round(self.x_at(start))
-            painter.fillRect(left, top, max(round(self.x_at(end)) - left, 1), self.BAR, QColor(RED if live else INK))
-        painter.fillRect(0, bottom, width + 1, 1, QColor(INK))
+            painter.fillRect(left, top, max(round(self.x_at(end)) - left, 1), self.BAR, QColor(colors["red"] if live else colors["ink"]))
+        painter.fillRect(0, bottom, width + 1, 1, QColor(colors["ink"]))
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(INK))
+        painter.setBrush(QColor(colors["ink"]))
         for moment, came_on in self.marks:
             x = self.x_at(moment)
             tip, base = (bottom + 4, bottom + 11) if came_on else (bottom + 11, bottom + 4)
             painter.drawPolygon(QPolygonF([QPointF(x, tip), QPointF(x - 4, base), QPointF(x + 4, base)]))
         if self.day[0] <= self.now < self.day[1]:
             painter.fillRect(QRectF(round(self.x_at(self.now)) - 1, 2, 2, bottom + 3),
-                             QColor(RED if self.recording else GRAPHITE))
+                             QColor(colors["red"] if self.recording else colors["graphite"]))
         painter.end()
 
     def run_at(self, index):
@@ -441,11 +453,13 @@ def battery_summary(status):
 
 
 class MainWindow(QMainWindow):
-    LEDGER, SETTINGS = 0, 1
+    LEDGER, SETTINGS, MANAGEMENT = 0, 1, 2
 
     def __init__(self, config, config_path, store):
         super().__init__()
         self.config, self.config_path, self.store = config, config_path, store
+        self.system_scheme = QApplication.styleHints().colorScheme()
+        self.theme_colors = THEMES[self.resolved_theme()]
         self.reader = ForegroundReader()
         if hasattr(self.reader, "set_aliases"):
             self.reader.set_aliases(config.app_aliases)
@@ -475,7 +489,9 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(app_icon())
         self.resize(1080, 820)
         self.setMinimumSize(860, 560)
-        self.setStyleSheet(stylesheet())
+        self.setAttribute(Qt.WidgetAttribute.WA_WindowPropagation, True)
+        self.setPalette(palette_for(self.theme_colors))
+        self.setStyleSheet(stylesheet(self.theme_colors))
         self._build_ui()
         self._build_tray()
         self._populate()
@@ -492,6 +508,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             app.aboutToQuit.connect(self.about_to_quit)
+            app.styleHints().colorSchemeChanged.connect(self.system_theme_changed)
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self.tick)
@@ -514,6 +531,8 @@ class MainWindow(QMainWindow):
         self.pages = QStackedWidget()
         self.pages.addWidget(self._scrolling(self._build_ledger_page()))
         self.pages.addWidget(self._build_settings_page())
+        self.management_panel = ManagementPanel(self)
+        self.pages.addWidget(self._scrolling(self.management_panel))
         layout.addWidget(self.pages, 1)
         # Focus rings are for keyboard navigation: a mouse click should not leave a button or box marked.
         for control in self.findChildren(QPushButton) + self.findChildren(QCheckBox):
@@ -546,14 +565,77 @@ class MainWindow(QMainWindow):
             label.setContentsMargins(0, 0, 0, NavTab.BAR)
             row.addWidget(label)
         row.addStretch()
-        self.ledger_tab, self.settings_tab = NavTab("记录"), NavTab("设置")
-        for page, tab in enumerate((self.ledger_tab, self.settings_tab)):
+        self.ledger_tab, self.settings_tab, self.management_tab = NavTab("记录"), NavTab("设置"), NavTab("服务端")
+        for page, tab in enumerate((self.ledger_tab, self.settings_tab, self.management_tab)):
             tab.clicked.connect(lambda checked=False, page=page: self.show_page(page))
             row.addSpacing(28)
             row.addWidget(tab)
+        row.addSpacing(24)
+        self.theme_button = QPushButton("主题 · " + THEME_LABELS[self.config.theme])
+        self.theme_button.setObjectName("themeButton")
+        self.theme_button.setToolTip("跟随 Windows 主题，或手动选择浅色 / 深色；选择后立即保存。")
+        self.theme_menu = QMenu(self.theme_button)
+        group = QActionGroup(self.theme_menu)
+        self.theme_actions = {}
+        for mode, label in THEME_LABELS.items():
+            action = self.theme_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(mode == self.config.theme)
+            group.addAction(action)
+            action.triggered.connect(lambda checked=False, mode=mode: self.select_theme(mode))
+            self.theme_actions[mode] = action
+        self.theme_button.setMenu(self.theme_menu)
+        self.theme_button.setAccessibleName("切换主题，当前" + THEME_LABELS[self.config.theme])
+        row.addWidget(self.theme_button)
         layout.addLayout(row)
         layout.addWidget(self._rule("heavyRule", 3))
         return head
+
+    # ---- appearance ---------------------------------------------------------------------------------------------
+
+    def resolved_theme(self):
+        if self.config.theme == "system":
+            return "dark" if self.system_scheme == Qt.ColorScheme.Dark else "light"
+        return self.config.theme
+
+    def system_theme_changed(self, scheme):
+        self.system_scheme = scheme
+        if self.config.theme == "system" and not self.quitting:
+            self.apply_theme()
+
+    def select_theme(self, mode):
+        if mode not in THEME_LABELS:
+            return
+        # Only persist the appearance preference: unfinished connection edits stay in the form.
+        candidate = replace(self.config, theme=mode)
+        try:
+            save_config(self.config_path, candidate, encrypt)
+        except Exception as exc:
+            self.theme_actions[self.config.theme].setChecked(True)
+            QMessageBox.warning(self, "主题保存失败", f"无法保存主题设置：{exc}")
+            return
+        self.config = candidate
+        self.apply_theme()
+
+    def apply_theme(self):
+        self.theme_colors = THEMES[self.resolved_theme()]
+        palette = palette_for(self.theme_colors)
+        self.setPalette(palette)
+        self.setStyleSheet(stylesheet(self.theme_colors))
+        for menu in self.findChildren(QMenu):
+            menu.setPalette(palette)
+        label = THEME_LABELS[self.config.theme]
+        self.theme_button.setText("主题 · " + label)
+        self.theme_button.setAccessibleName("切换主题，当前" + label)
+        self.theme_actions[self.config.theme].setChecked(True)
+        # Painted widgets and item foregrounds do not get their colours from QSS.
+        for row in range(self.history.rowCount()):
+            item = self.history.item(row, 4)
+            if item is not None:
+                item.setForeground(QColor(self.history_color(item.data(Qt.ItemDataRole.UserRole))))
+        for widget in self.findChildren(QWidget):
+            widget.update()
+        self.update()
 
     def _build_state_band(self):
         """The state of the agent, visible on every page: lamp in the margin, state word, and the two actions."""
@@ -715,7 +797,7 @@ class MainWindow(QMainWindow):
         actions.addWidget(dashboard)
         actions.addStretch()
         grid.addLayout(actions, 0, 1)
-        self.connection_note = self._label("hint", "修改后点击「保存设置」或按 Ctrl+S 生效。")
+        self.connection_note = self._label("hint", "首次保存或更换连接会验证账户和设备上传；测试连接会更新设备心跳。")
         grid.addWidget(self.connection_note, 1, 1)
         grid.setColumnStretch(1, 1)
         outer.addLayout(grid)
@@ -981,7 +1063,7 @@ class MainWindow(QMainWindow):
 
     def show_page(self, page):
         self.pages.setCurrentIndex(page)
-        (self.ledger_tab, self.settings_tab)[page].setChecked(True)
+        (self.ledger_tab, self.settings_tab, self.management_tab)[page].setChecked(True)
 
     def show_startup_state(self, wanted):
         """Show what Windows will actually do, which can differ from the saved preference."""
@@ -1027,6 +1109,8 @@ class MainWindow(QMainWindow):
         self.edit_alias(row, 1 if process else 0)
 
     def alias_from_history(self, row, column):
+        if self.job_thread is not None:
+            return
         name, process = self.history.item(row, 0), self.history.item(row, 1)
         if name is None or process is None or name.data(Qt.ItemDataRole.UserRole) != "app_usage":
             return
@@ -1057,18 +1141,21 @@ class MainWindow(QMainWindow):
         return aliases
 
     def candidate(self):
+        device_ids = dict(self.config.device_ids)
+        if self.config.host and self.config.account_id:
+            device_ids[self.config.destination] = self.config.device_id
         config = replace(self.config, host=self.host.text(), port=self.port.value(),
             protocol=self.protocol.currentText(), api_key=self.key.text().strip(), device_name=self.device_name.text(),
             startup=self.startup.isChecked(), silent_start=self.silent.isChecked(),
             idle_seconds=self.idle.value(), upload_seconds=self.interval.value(),
             battery_enabled=self.battery.isChecked(), battery_seconds=self.battery_interval.value(),
             upload_on_shutdown=self.shutdown_upload.isChecked(), upload_on_suspend=self.suspend_upload.isChecked(),
-            app_aliases=self.collect_aliases())
+            app_aliases=self.collect_aliases(), device_ids=device_ids)
         config.validate()
         return config
 
     def connection_job(self, saving):
-        if self.job_thread is not None:
+        if self.job_thread is not None or self.management_panel.thread is not None:
             return
         try:
             candidate = self.candidate()
@@ -1083,6 +1170,7 @@ class MainWindow(QMainWindow):
         self.job_result = None
         self.save_button.setEnabled(False)
         self.test_button.setEnabled(False)
+        self.settings_scroll.setEnabled(False)
         self.connection_note.setText("正在验证连接，请稍候…")
         self.job_thread = QThread(self)
         self.job = ConnectionJob(candidate)
@@ -1102,19 +1190,22 @@ class MainWindow(QMainWindow):
         self.job_thread, self.job = None, None
         self.save_button.setEnabled(True)
         self.test_button.setEnabled(True)
+        self.settings_scroll.setEnabled(True)
         result, error = self.job_result or (None, "连接任务未完成")
         if error:
             self.connection_note.setText("验证失败：" + error)
             return
-        candidate = self.job_candidate
-        candidate.account_id, candidate.username = result["account_id"], result["username"]
-        self.connection_note.setText(f"连接成功 · 账户 {candidate.username} · 服务端保留 {result['retention_days']} 天")
+        candidate = self.job_candidate.bind_account(result["account_id"], result["username"], result.get("device_id"))
+        self.connection_note.setText(f"账户与设备上传验证成功 · {candidate.username} · 服务端保留 {result['retention_days']} 天")
         if self.job_saving:
-            if candidate.destination != self.config.destination:
-                candidate.device_id = str(uuid.uuid4())
             self.apply_config(candidate)
+        else:
+            # Retain a successfully probed identity so testing before saving never creates another device.
+            self.config.device_ids[candidate.destination] = candidate.device_id
 
     def apply_config(self, candidate):
+        # A network check may have started before a new theme was selected in the masthead.
+        candidate = replace(candidate, theme=self.config.theme)
         previous = self.config
         was_running = self.running
         try:
@@ -1285,7 +1376,7 @@ class MainWindow(QMainWindow):
             ("（其他连接的缓存保持隔离，需切回原账户上传）" if total > current else ""))
         records = self.store.recent(self.config.destination)
         # Pending rows are set in bold ink, sent rows recede to grey, rejected rows turn red.
-        states = {PENDING: ("待上传", INK, True), SENT: ("已上传", GRAPHITE, False)}
+        states = {PENDING: ("待上传", True), SENT: ("已上传", False)}
         self.history_empty.setVisible(not records)
         self.history.setVisible(bool(records))
         self.history.setRowCount(len(records))
@@ -1297,7 +1388,7 @@ class MainWindow(QMainWindow):
                           battery_summary(event)]
             else:
                 values = [event["app_name"], event["process_name"], ended, f"{event['duration_seconds']:.1f} 秒"]
-            label, color, bold = states.get(state, ("服务器拒收", RED, True))
+            label, bold = states.get(state, ("服务器拒收", True))
             values.append(label)
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
@@ -1307,7 +1398,8 @@ class MainWindow(QMainWindow):
                 if column == 2:
                     item.setFont(figure_font(13))
                 if column == 4:
-                    item.setForeground(QColor(color))
+                    item.setData(Qt.ItemDataRole.UserRole, state)
+                    item.setForeground(QColor(self.history_color(state)))
                     if bold:
                         font = item.font()
                         font.setBold(True)
@@ -1315,6 +1407,9 @@ class MainWindow(QMainWindow):
                 self.history.setItem(row, column, item)
         self.refresh_day()
         self.last_refresh = time.monotonic()
+
+    def history_color(self, state):
+        return self.theme_colors[{PENDING: "ink", SENT: "graphite"}.get(state, "red")]
 
     def upload_now(self):
         self.save_open_segment()
@@ -1440,6 +1535,21 @@ class MainWindow(QMainWindow):
             config = self.config
         webbrowser.open(config.base_url)
 
+    def management_endpoint(self):
+        config = replace(self.config, host=self.host.text(), port=self.port.value(), protocol=self.protocol.currentText())
+        config.validate_endpoint()
+        return config
+
+    def use_management_token(self, base_url, api_key):
+        endpoint = urlsplit(base_url)
+        self.host.setText(endpoint.hostname)
+        self.port.setValue(endpoint.port or (443 if endpoint.scheme == "https" else 80))
+        self.protocol.setCurrentText(endpoint.scheme)
+        self.key.setText(api_key)
+        self.mark_dirty()
+        self.show_page(self.SETTINGS)
+        self.connection_job(True)
+
     def tray_activated(self, reason):
         if reason in {QSystemTrayIcon.ActivationReason.DoubleClick, QSystemTrayIcon.ActivationReason.Trigger}:
             self.show_window()
@@ -1460,8 +1570,8 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def quit_app(self):
-        if self.job_thread is not None:
-            self.connection_note.setText("连接验证结束后即可退出（最长约10秒）。")
+        if self.job_thread is not None or self.management_panel.thread is not None:
+            self.connection_note.setText("网络任务结束后即可退出。")
             self.show_window()
             return
         self.quitting = True

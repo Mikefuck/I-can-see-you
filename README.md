@@ -2,6 +2,20 @@
 
 一套可运行的 Windows 前台应用使用记录客户端，以及面向 Linux Docker 的多用户服务端。
 
+## 下载与快速开始
+
+2026-10-15 发布：客户端 **0.2.1**，服务端镜像 **2026.10.15-r3**，均已包含深浅色主题。客户端支持 Windows 10 / 11 x64，服务端镜像支持 Linux x86_64 / amd64。
+
+| 文件 | 用法 |
+| --- | --- |
+| [FocusLedger-Setup-windows-x64.exe](client/release/FocusLedger-Setup-windows-x64.exe) | 推荐：中文安装向导，可在 Windows 应用列表卸载，无需安装 Python |
+| [FocusLedger.exe](client/release/FocusLedger.exe) | 客户端单文件版，双击运行，无需安装 Python |
+| [FocusLedger-windows-x64.zip](client/release/FocusLedger-windows-x64.zip) | 客户端文件夹版，解压后运行 `FocusLedger/FocusLedger.exe` |
+| [FocusLedger-server-docker.zip](server/release/FocusLedger-server-docker.zip) | 服务端完整离线部署包，包含镜像、Compose 配置、配置示例和教程 |
+| [FocusLedger-server-linux-amd64.tar](server/release/FocusLedger-server-linux-amd64.tar) | 单独的 Docker 镜像，使用 `docker load -i` 导入 |
+
+推荐先按下方教程部署服务端、创建用户并生成上传密钥，再运行客户端。各自 `release/SHA256SUMS.txt` 提供发布文件的 SHA-256 校验值；服务端 ZIP 内还包含镜像校验文件。
+
 ## 目录分类
 
 ```text
@@ -9,7 +23,10 @@ client/                       Windows 客户端
 ├── main.py                   启动入口
 ├── focus_agent/              采集、缓存、上传与界面
 ├── requirements.txt          客户端依赖
-├── build.ps1                 Windows 打包脚本
+├── build.ps1                 Windows 打包脚本（默认生成安装包）
+├── build-installer.ps1       将文件夹版封装为安装包
+├── installer/               安装、升级、卸载规则与中文向导
+├── dist/FocusLedger.exe      单文件可执行程序
 ├── dist/FocusLedger/         可直接运行的程序
 ├── build/                    打包中间文件
 ├── tests/                    客户端与 GUI 测试
@@ -18,7 +35,8 @@ client/                       Windows 客户端
 └── release/                  客户端发布包与校验文件
 server/                       Linux Docker 服务端
 ├── app/                      接口、数据库与网页
-├── Dockerfile、compose.yaml  部署配置
+├── Dockerfile、compose*.yaml 部署与源码构建配置
+├── build_image.py            构建并导出可 docker load 的镜像
 ├── requirements.txt          服务端依赖
 ├── tests/                    服务端与客户端上传联调测试
 ├── tools/demo_server.py      服务端演示工具
@@ -33,7 +51,8 @@ tools/package_release.py      联合打包工具
 
 ## 已实现
 
-- Windows GUI：服务器 IP / 域名、端口、HTTP / HTTPS、上传密钥、设备名称、启动方式、电池及关机/休眠上传选项、应用名翻译、连接测试、采集状态、最近记录。
+- Windows GUI：服务器 IP / 域名、端口、HTTP / HTTPS、上传密钥、设备名称、启动方式、电池及关机/休眠上传选项、应用名翻译、实际上传连接测试、采集状态、最近记录。
+- 客户端「服务端」页：登录后生成自己的上传密钥并自动接入；管理员可查看 / 创建 / 启停用户、修改数据保留天数。管理密码和会话只保存在内存；运行天数持久化到服务端数据库。端口映射与 HTTPS 证书仍由服务器部署配置管理。
 - 每秒采样前台应用，记录应用名称、进程名、起止时间和使用秒数；商店（UWP）应用识别为实际应用进程，而不是 ApplicationFrameHost。按设置记录电池和系统生命周期状态。**不采集窗口标题、截图、键盘输入、文件内容或进程完整路径。**
 - 登录 Windows 后启动、静默进入系统托盘、托盘打开设置 / 暂停 / 上传 / 退出；再次运行程序会唤出已在托盘运行的主窗口。首次使用必须配置后开始采集。
 - 关机 / 注销、睡眠 / 休眠通过独立的隐藏系统窗口接收通知（静默启动、从未打开主窗口时同样有效）：先写入本地队列，再限时上传——关机最多等约3秒，睡眠最多约1.5秒，均不会阻止关机或睡眠；来不及上传的记录在下次联网后补传。
@@ -42,7 +61,8 @@ tools/package_release.py      联合打包工具
 - 默认无键鼠操作5分钟后暂停，支持调整或关闭空闲检测；锁屏和休眠仍停止计时。
 - 每30秒分段保存、默认每30秒上传；失败时保留 SQLite 队列，指数退避重试，服务端按记录 ID 去重。
 - 管理员创建 / 停用 / 启用用户；普通用户独立登录、修改密码、生成自己的上传密钥。设备与数据按账户隔离：**默认只有本人能看到自己的记录**，成员在「账户」页自愿公开后，其他成员才能在总览看到；管理员也只能看到已公开的记录。
-- 服务端网页采用瑞士铁路时刻表风格，手机与电脑自适应，跟随系统深浅色，并尊重「减少动态效果」设置：
+- 客户端与服务端网页默认跟随各自设备的系统深浅色；顶部主题按钮可选「跟随系统 / 浅色 / 深色」，立即生效并记住选择。客户端保存到本机配置，网页保存到当前浏览器；主题不跨设备同步。
+- 服务端网页采用瑞士铁路时刻表风格，手机与电脑自适应，并尊重「减少动态效果」设置：
   - **总览**：车站时钟与今日时刻表。每位成员（自己在前，其余为已公开成员）的每台设备一条时间线，标出使用中 / 空闲 / 休眠 / 关机 / 离线、正在使用的应用、电量和今日时长；红色指针是此刻，鼠标或手指划过时间线可查看每台设备在任一时刻的状态；每 30 秒自动刷新。
   - **我的记录 / 成员记录**：按日、周、月、年查看，可只看某台设备；日视图的时刻表、周 / 月的逐日时刻表、全年日历、应用排行（点选后在时刻表中标红）、每小时 / 每天 / 每月柱状图、使用记录和开关机记录。
   - **账户**（上传密钥、公开开关、设备、接入步骤、修改密码）与**成员**（管理员创建、停用账户）。
@@ -51,17 +71,23 @@ tools/package_release.py      联合打包工具
 
 ## Linux Docker 部署
 
-将 `server` 目录复制到 Linux 服务器。服务器需要 Docker Engine 和 Compose 插件。
+将 `server/release/FocusLedger-server-docker.zip` 上传到 Linux x86_64 服务器。服务器需要事先安装 Docker Engine 和 Compose 插件；导入和运行发布包不需要联网下载依赖。
 
 ```bash
+unzip FocusLedger-server-docker.zip
 cd server
+sha256sum -c IMAGE-SHA256SUMS.txt
+docker load -i FocusLedger-server-linux-amd64.tar
 cp .env.example .env
 nano .env
-docker compose up -d --build
+docker compose up -d
+docker compose ps
 docker compose logs -f server
 ```
 
-在 `.env` 填写 `ADMIN_USERNAME` 和至少12个字符的 `ADMIN_PASSWORD`，默认网页端口为 `8080`。首次启动创建管理员；已有数据库时不会通过环境变量覆盖密码。可用 `SERVER_PORT` 修改端口，`RETENTION_DAYS` 设置1–365天。
+在 `.env` 填写 `ADMIN_USERNAME` 和至少12个字符的 `ADMIN_PASSWORD`（建议用英文单引号包住密码），默认网页端口为 `8080`。首次启动创建管理员；已有数据库时不会通过环境变量覆盖密码。可用 `SERVER_PORT` 修改端口，`RETENTION_DAYS` 设置初始1–365天；客户端管理页保存后以数据库中的天数为准。镜像标签为 `focusledger-server:2026.10.15-r3`，与 `.env` 的 `FOCUSLEDGER_IMAGE` 保持一致。
+
+等待 `docker compose ps` 显示 `healthy` 后访问网页。日志查看时按 Ctrl+C 不会停止服务。源码目录内的单独镜像位于 `server/release/`；若在源码的 `server` 目录导入，请改用 `docker load -i release/FocusLedger-server-linux-amd64.tar`。**不能把 ZIP 直接传给 `docker load`。**
 
 1. 打开 `http://服务器IP:8080`，使用管理员账户登录。
 2. 在「成员」创建所需用户。
@@ -72,11 +98,17 @@ docker compose logs -f server
 
 数据库保存在 Docker 命名卷 `focus-data`，容器重建后仍保留。`docker compose down` 保留数据，**`docker compose down -v` 会删除数据**。如保留备份，备份也需执行相同的最长一年保留策略。
 
+更新、备份、HTTPS、参数说明和故障处理见 [服务端完整教程](server/README.md)。默认 Compose 使用已导入镜像；从源码部署请在 `server` 目录运行 `docker compose -f compose.yaml -f compose.build.yaml up -d --build`。
+
 ## Windows 使用
 
-已打包的程序位于 `client/dist/FocusLedger/FocusLedger.exe`。请复制**整个 FocusLedger 文件夹**到稳定位置，然后运行里面的 exe；无需另装 Python。
+推荐双击 `client/release/FocusLedger-Setup-windows-x64.exe`，按照中文向导安装。默认安装在 `%LOCALAPPDATA%\Programs\FocusLedger`，仅供当前 Windows 用户使用，无需管理员权限。安装后从开始菜单打开「专注记录」，也可在安装时选择创建桌面快捷方式。
 
-也可以使用 `client/release/FocusLedger-windows-x64.zip`。服务端部署包为 `server/release/FocusLedger-server-docker.zip`。各自目录中的 `SHA256SUMS.txt` 可用于校验发布包。
+以后直接运行新版安装包覆盖升级。卸载可使用 Windows「设置 → 应用 → 已安装的应用」（Windows 10 为「应用和功能」）中的「专注记录 · Focus Ledger」，或开始菜单中的「卸载专注记录」。安装 / 升级 / 卸载前先从系统托盘右键退出程序。卸载会清理程序、快捷方式及对应启动项，保留 `%LOCALAPPDATA%\FocusLedger` 中的配置与缓存；需要彻底清除本机数据时再手动删除该目录。
+
+原有免安装版配置可直接沿用，已有自动启动路径会在安装时迁移，并保留启用 / 禁用状态。确认安装版正常后可删除旧免安装程序。仍需要单文件版时可运行 `client/release/FocusLedger.exe`；首次启动会解压内置运行库，可能等待数秒。
+
+也可以使用 `client/release/FocusLedger-windows-x64.zip`，解压后运行 `FocusLedger/FocusLedger.exe`。文件夹版必须保留**整个 FocusLedger 文件夹**和 `_internal` 依赖目录，不能只取其中的小 EXE。两种版本共用配置与队列。
 
 1. 在 GUI 中填写服务器 IP / 域名、端口、协议、上传密钥和设备名称。
 2. 点击「保存设置」，首次保存会联网验证账户。
@@ -102,7 +134,20 @@ python -m venv .venv
 .\client\build.ps1 -Python (Resolve-Path .venv\Scripts\python.exe).Path
 ```
 
-移动程序文件夹后，从新位置运行一次程序即可自动更新开机启动路径。卸载前取消开机启动、保存并退出，之后删除程序文件夹；是否保留 `%LOCALAPPDATA%\FocusLedger` 由你决定。
+默认生成 `client/release/FocusLedger-Setup-windows-x64.exe` 和校验值，构建电脑还需要 [Inno Setup](https://jrsoftware.org/isdl.php)（推荐 6.7.3 或更高版本）；可用 `-Iscc` 指定编译器路径。安装包内含完整运行库，目标电脑无需 Python 或 Inno Setup。
+
+加 `-Package all` 同时生成免安装单文件与文件夹版；加 `-Package portable` 则仅构建免安装版本，可搭配 `-Layout onefile` 或 `-Layout onedir`。已有 `client/dist/FocusLedger/` 时可运行 `client/build-installer.ps1` 重新封装安装包。
+
+只发布客户端执行 `python tools/package_release.py --client-only`；加 `--portable` 可同时发布已构建的免安装版。完整联合发布先用 `-Package all` 构建客户端，并执行 `python server/build_image.py` 导出服务端镜像（需要可用的 Linux Docker 引擎），最后执行：
+
+```powershell
+python tools/package_release.py
+Get-FileHash client\release\FocusLedger-Setup-windows-x64.exe -Algorithm SHA256
+```
+
+打包工具会把 EXE、ZIP 和镜像校验文件写到两端各自的 `release` 目录。构建过程中需要联网，发布后的客户端和服务端不依赖本机 Python 环境。
+
+免安装版本移动位置后，从新位置运行一次程序即可自动更新开机启动路径。删除免安装版本前取消开机启动、保存并退出，再删除程序文件。安装版使用系统卸载入口即可。
 
 ## 账户切换与缓存
 
@@ -130,9 +175,9 @@ python -m pytest
 
 可分别运行 `python -m pytest client/tests` 和 `python -m pytest server/tests`；真实 HTTP 上传联调测试位于 `server/tests/test_upload_integration.py`，需要安装两端依赖。
 
-重新生成两端发布包：在项目根目录执行 `python tools/package_release.py`。请先运行客户端的 `build.ps1`，发布包与 SHA-256 校验文件会分别写入 `client/release` 和 `server/release`。
+重新生成两端发布包：先运行客户端 `build.ps1` 和服务端 `build_image.py`，再在项目根目录执行 `python tools/package_release.py`。发布包与 SHA-256 校验文件会分别写入 `client/release` 和 `server/release`。
 
-本次65项测试通过。完整验证范围与预览见 [docs/VALIDATION.md](docs/VALIDATION.md)，Linux Docker 容器尚未在本机实测。
+当前 0.2.1 源码的 111 项自动化测试通过，深浅色主题另通过 31 项浏览器检查。源码更新与已有发布包的验证范围见 [docs/VALIDATION.md](docs/VALIDATION.md)。
 
 采样精度约1秒，正常退出前保存当前段，异常终止最多丢失最近约30秒。默认空闲检测依赖键鼠活动，观看视频时可调整空闲阈值。受保护的系统进程无法读取时跳过。服务端判定为格式无效的个别记录会标记为「服务器拒收」并保留在本地，不再阻塞其他记录上传。设备时钟需正常同步，超前5分钟的上传会被拒绝。服务端网页和客户端列表都按查看者本机时区显示时间（网页由浏览器换算，页脚注明当前时区）；服务端存储和接口使用 UTC。
 

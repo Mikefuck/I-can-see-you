@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import logging
 import math
 import secrets
@@ -20,6 +22,7 @@ from .board import MAX_SPAN, board, find_person, person_view
 from .config import Settings
 from .database import Database
 from .models import Batch, DeviceStatusEvent, UsageEvent
+from .management import management_router
 from .security import password_hash, token_hash, valid_username, verify_password
 
 
@@ -100,7 +103,7 @@ def create_app(settings=None):
             with suppress(asyncio.CancelledError):
                 await task
 
-    app = FastAPI(title="Focus Ledger", version="0.1.0", lifespan=lifespan,
+    app = FastAPI(title="Focus Ledger", version="0.2.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.database = database
     app.add_middleware(BodyLimit)
@@ -128,7 +131,7 @@ def create_app(settings=None):
             return await http_exception_handler(request, exc)
         user = await asyncio.to_thread(session, request)
         return templates.TemplateResponse(request=request, name="error.html", status_code=exc.status_code,
-            context={"user": user, "retention": settings.retention_days, "status": exc.status_code,
+            context={"user": user, "retention": database.retention_days, "status": exc.status_code,
                      "message": {"Not Found": "没有这个页面", "Method Not Allowed": "这个地址不接受这种请求"}
                                 .get(exc.detail, exc.detail)})
 
@@ -172,7 +175,7 @@ def create_app(settings=None):
 
     def render(request, name, user=None, **context):
         return templates.TemplateResponse(request=request, name=name,
-            context={"user": user, "retention": settings.retention_days, **context})
+            context={"user": user, "retention": database.retention_days, **context})
 
     @app.get("/healthz")
     def health():
@@ -367,7 +370,7 @@ def create_app(settings=None):
     def check(request: Request):
         user = api_user(request)
         return {"ok": True, "account_id": user["id"], "username": user["username"], "schema_version": 1,
-                "features": ["app_usage", "device_status"], "retention_days": settings.retention_days}
+                "features": ["app_usage", "device_status", "management"], "retention_days": database.retention_days}
 
     @app.post("/api/v1/usage/batches")
     def ingest(batch: Batch, request: Request):
@@ -391,6 +394,8 @@ def create_app(settings=None):
                 acknowledged.append(event_id)
                 if isinstance(event, UsageEvent):
                     start, end = event.started_at.timestamp(), event.ended_at.timestamp()
+                    fingerprint = hashlib.sha256(json.dumps([event.app_name, event.process_name,
+                        start, end, event.duration_seconds], ensure_ascii=False).encode()).hexdigest()
                 else:
                     start = end = event.occurred_at.timestamp()
                 if end <= cutoff:
@@ -404,15 +409,21 @@ def create_app(settings=None):
                     previous = db.execute("SELECT * FROM events WHERE user_id=? AND device_id=? AND event_id=?",
                                           (user["id"], device_id, event_id)).fetchone()
                     if previous:
+                        # New rows retain a digest of the original payload even when retention trims the span.
+                        same_span = (previous["payload_hash"] == fingerprint if previous["payload_hash"] else
+                                     abs(previous["started_at"] - max(start, previous["started_at"]
+                                         if previous["started_at"] <= cutoff else start)) <= 0.001)
                         if (previous["app_name"] != event.app_name or previous["process_name"] != event.process_name or
-                                abs(previous["ended_at"] - end) > 0.001):
+                                abs(previous["ended_at"] - end) > 0.001 or not same_span):
                             raise HTTPException(409, "记录 ID 冲突")
+                        if not previous["payload_hash"]:
+                            db.execute("UPDATE events SET payload_hash=? WHERE row_id=?", (fingerprint, previous["row_id"]))
                         duplicates += 1
                         continue
                     start = max(start, cutoff)
-                    db.execute("INSERT INTO events(event_id,user_id,device_id,kind,app_name,process_name,started_at,ended_at,duration_seconds) "
-                               "VALUES(?,?,?,?,?,?,?,?,?)", (event_id, user["id"], device_id, event.kind, event.app_name,
-                               event.process_name, start, end, end - start))
+                    db.execute("INSERT INTO events(event_id,user_id,device_id,kind,app_name,process_name,started_at,ended_at,duration_seconds,payload_hash) "
+                               "VALUES(?,?,?,?,?,?,?,?,?,?)", (event_id, user["id"], device_id, event.kind, event.app_name,
+                               event.process_name, start, end, end - start, fingerprint))
                 else:
                     cross_kind = db.execute("SELECT 1 FROM events WHERE user_id=? AND device_id=? AND event_id=?",
                                             (user["id"], device_id, event_id)).fetchone()
@@ -440,6 +451,7 @@ def create_app(settings=None):
         return {"acknowledged_ids": acknowledged, "inserted": inserted, "duplicates": duplicates,
                 "expired": expired, "server_time": datetime.now(timezone.utc).isoformat()}
 
+    app.include_router(management_router(database, settings, require_user, require_admin, limiter, COOKIE))
     return app
 
 

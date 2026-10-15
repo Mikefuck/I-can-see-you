@@ -13,3 +13,6 @@ server/data/
 .runtime/
 client/release/*.zip
 server/release/*.zip
+client/release/*.exe
+server/release/*.tar
+server/release/*.tar.gz
