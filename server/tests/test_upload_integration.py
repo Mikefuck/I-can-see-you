@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import uvicorn
@@ -89,6 +90,70 @@ def test_real_http_connection_probe_detects_blocked_upload(tmp_path):
         assert request_json(config, "/api/v1/agent/check")["ok"]
         with pytest.raises(RuntimeError, match="HTTP 403"):
             check_connection(config)
+
+
+def test_real_http_dual_addresses_switch_both_ways_and_keep_offline_queue(tmp_path):
+    settings = Settings(tmp_path / "dual.db", admin_username="admin", admin_password=PASSWORD)
+    primary, fallback = create_app(settings), create_app(settings)
+    primary.state.database.initialize()
+    key = "dual-address-token-" + "x" * 30
+    with primary.state.database.connect() as db:
+        db.execute("UPDATE users SET upload_hash=? WHERE id=1", (token_hash(key),))
+    unavailable = set()
+
+    def gate(app, name):
+        @app.middleware("http")
+        async def availability(request, call_next):
+            if name in unavailable:
+                await request.body()
+                return JSONResponse({"detail": "Synthetic unavailable route"}, 503)
+            return await call_next(request)
+
+    gate(primary, "primary")
+    gate(fallback, "fallback")
+    with real_server(primary) as primary_port, real_server(fallback) as fallback_port:
+        original = Config(host="127.0.0.1", port=primary_port, api_key=key, account_id=1, username="admin")
+        checked = check_connection(original)
+        config = replace(original, fallback_host="127.0.0.1", fallback_port=fallback_port, upload_seconds=10)
+        assert config.destination == original.destination
+        unavailable.add("primary")
+        assert check_connection(config)["device_id"] == checked["device_id"]
+        assert config.active_url == f"http://127.0.0.1:{fallback_port}"
+        session = ManagementSession(replace(config, preferred_endpoint=""))
+        assert session.login("admin", PASSWORD)["is_admin"]
+        assert session.base_url == config.active_url
+        session.close()
+
+        store = EventStore(tmp_path / "dual-queue.db")
+        first = batch(device=config.device_id)["events"]
+        store.add(original, first)  # Records collected before the second address was added.
+        uploader = Uploader(store, config)
+        uploader.start()
+        try:
+            assert uploader.flush(5)
+            assert store.counts(original.destination)[0] == 0
+            assert uploader.config.active_url == config.base_urls[1]
+            unavailable.clear()
+            unavailable.add("fallback")
+            second = batch(device=config.device_id)["events"]
+            store.add(config, second)
+            assert uploader.flush(5)
+            assert uploader.config.active_url == original.base_url
+            assert uploader.config.device_id == original.device_id
+            unavailable.add("primary")
+            third = batch(device=config.device_id)["events"]
+            store.add(config, third)
+            assert not uploader.flush(0.5)
+            assert store.batch(original.destination)["events"] == third
+            unavailable.remove("fallback")
+            assert uploader.flush(5)
+            assert store.counts(original.destination)[0] == 0
+            with primary.state.database.connect() as db:
+                assert db.execute("SELECT COUNT(*) FROM devices").fetchone()[0] == 1
+                assert db.execute("SELECT COUNT(*) FROM events").fetchone()[0] == len(first + second + third)
+        finally:
+            uploader.stop()
+            uploader.thread.join(5)
 
 
 def test_real_http_client_to_server_and_offline_queue(tmp_path):

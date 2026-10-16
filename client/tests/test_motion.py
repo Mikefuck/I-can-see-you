@@ -5,6 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QAbstractAnimation, QEvent, Qt
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLineEdit, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
@@ -43,6 +44,28 @@ def test_rapid_page_changes_show_latest_page_and_release_snapshots(ui):
     assert not stack.frame.isVisible()
     assert stack.frame.before.isNull() and stack.frame.after.isNull()
     assert stack.currentWidget().isVisible()
+
+
+def test_page_crossfade_keeps_background_brightness(ui):
+    app, stack = ui
+    color = QColor("#708090")
+    for index in range(stack.count()):
+        page = stack.widget(index)
+        palette = page.palette()
+        palette.setColor(QPalette.ColorRole.Window, color)
+        page.setPalette(palette)
+        page.setAutoFillBackground(True)
+    app.processEvents()
+    for index in (1, 0, 2):
+        stack.setCurrentIndex(index)
+        stack.animation.pause()
+        for elapsed in (0, 45, 110, 219):
+            stack.animation.setCurrentTime(elapsed)
+            image = stack.grab().toImage()
+            ratio = image.devicePixelRatio()
+            actual = image.pixelColor(round(300 * ratio), round(5 * ratio))
+            assert actual == color, (index, elapsed, actual.name())
+        stack.finish_transition()
 
 
 def test_input_during_page_transition_uses_live_control(ui):

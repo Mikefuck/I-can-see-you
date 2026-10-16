@@ -1,5 +1,5 @@
 """Short, interruptible UI motion. Control values always change before their animation."""
-from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QEasingCurve, Qt, QVariantAnimation
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QEasingCurve, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QPushButton, QStackedWidget,
@@ -62,7 +62,7 @@ class _PageFrame(QWidget):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(colors_for(self)["paper"]))
         # Twelve logical pixels communicate direction without moving the actual layout or focus.
-        painter.setOpacity(1 - self.progress)
+        # Keep the outgoing image opaque: fading both images exposes the base colour mid-transition.
         painter.drawPixmap(QPointF(-12 * self.direction * self.progress, 0), self.before)
         painter.setOpacity(self.progress)
         painter.drawPixmap(QPointF(12 * self.direction * (1 - self.progress), 0), self.after)
@@ -83,18 +83,24 @@ class PageStack(QStackedWidget):
         self.animation.finished.connect(self.finish_transition)
         QApplication.instance().installEventFilter(self)
 
+    def _snapshot(self):
+        # The pages are transparent over the window's painted ambient background. Grabbing only
+        # the stack substitutes Qt's default palette (black on dark Windows) for that background.
+        window = self.window()
+        return window.grab(QRect(self.mapTo(window, QPoint()), self.size()))
+
     def setCurrentIndex(self, index):
         if index == self.currentIndex() or not 0 <= index < self.count():
             return
         animate = self.isVisible() and animations_enabled() and self.currentWidget() is not None
         previous = self.currentIndex()
-        before = self.grab() if animate else QPixmap()
+        before = self._snapshot() if animate else QPixmap()
         self.finish_transition()
         super().setCurrentIndex(index)
         if not animate:
             return
         self.layout().activate()
-        self.frame.before, self.frame.after = before, self.grab()
+        self.frame.before, self.frame.after = before, self._snapshot()
         self.frame.direction = 1 if index > previous else -1
         self.frame.progress = 0.0
         self.frame.setGeometry(self.rect())

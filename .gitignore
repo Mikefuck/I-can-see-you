@@ -7,6 +7,7 @@ dist/
 *.spec
 server/.env
 server/data/
+server/focus-data/
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm

@@ -38,7 +38,7 @@ class ManagementPanel(QWidget):
         heading = QLabel("服务端管理")
         heading.setObjectName("sectionTitle")
         layout.addWidget(heading)
-        self.endpoint = QLabel("使用「设置」页填写的地址、端口和协议登录，无需先生成上传密钥。")
+        self.endpoint = QLabel("使用「设置」页的地址登录，主地址无法连接时尝试备用地址，无需先生成上传密钥。")
         self.endpoint.setWordWrap(True)
         layout.addWidget(self.endpoint)
         login = QGridLayout()

@@ -112,7 +112,8 @@ def main():
     for name in ("cache.sqlite3", "cache.sqlite3-wal", "cache.sqlite3-shm"):
         (data / name).unlink(missing_ok=True)
     store = EventStore(data / "cache.sqlite3")
-    config = Config(host="192.168.1.10", api_key="demo-key-" + "x"*35, account_id=1,
+    config = Config(host="focus.example.com", port=443, protocol="https", fallback_host="192.168.1.10",
+                    api_key="demo-key-" + "x"*35, account_id=1,
                     username="alice", device_name="我的工作电脑", silent_start=True, startup=True,
                     app_aliases={"weixin.exe": "微信"})
     usage, status = synthetic_day(time.time())

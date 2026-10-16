@@ -1,4 +1,5 @@
 # 离线部署：先 docker load 导入镜像，再在同目录 .env 中设置管理员密码。
+# 新装先执行 docker volume create focusledger-data；升级时将 FOCUSLEDGER_DATA_VOLUME 设为旧卷实际名称。
 services:
   server:
     image: ${FOCUSLEDGER_IMAGE:-focusledger-server:2026.10.15-r6}
@@ -32,3 +33,7 @@ services:
         max-file: "3"
 volumes:
   focus-data:
+    # 固定实际卷名，不随部署目录或 Compose 项目名变化；缺失时停止部署，避免自动使用空卷。
+    name: ${FOCUSLEDGER_DATA_VOLUME:-focusledger-data}
+    # 由部署者管理生命周期，docker compose down -v 也不会删除此卷。
+    external: true

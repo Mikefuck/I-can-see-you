@@ -31,11 +31,39 @@ class Config:
     upload_on_suspend: bool = True
     app_aliases: dict = field(default_factory=dict)
     theme: str = "system"
+    fallback_host: str = ""
+    fallback_port: int = 8080
+    fallback_protocol: str = "http"
+    preferred_endpoint: str = field(default="", repr=False, compare=False)
 
     @property
     def base_url(self):
-        host = self.host.strip().strip("[]")
-        return f"{self.protocol}://{'[' + host + ']' if ':' in host else host}:{self.port}"
+        return self.endpoint_url(self.host, self.port, self.protocol)
+
+    @staticmethod
+    def endpoint_url(host, port, protocol):
+        host = host.strip().strip("[]")
+        return f"{protocol}://{'[' + host + ']' if ':' in host else host}:{port}"
+
+    @property
+    def base_urls(self):
+        urls = [self.base_url]
+        if self.fallback_host.strip():
+            fallback = self.endpoint_url(self.fallback_host, self.fallback_port, self.fallback_protocol)
+            if fallback not in urls:
+                urls.append(fallback)
+        return tuple(urls)
+
+    @property
+    def connection_urls(self):
+        urls = self.base_urls
+        if self.preferred_endpoint in urls:
+            return (self.preferred_endpoint,) + tuple(url for url in urls if url != self.preferred_endpoint)
+        return urls
+
+    @property
+    def active_url(self):
+        return self.connection_urls[0]
 
     @property
     def destination(self):
@@ -60,14 +88,26 @@ class Config:
         return bound
 
     def validate_endpoint(self):
-        self.host = self.host.strip().strip("[]")
+        self.host = self.validate_address(self.host, self.port, self.protocol)
+        self.fallback_host = self.fallback_host.strip()
+        if self.fallback_host:
+            try:
+                self.fallback_host = self.validate_address(
+                    self.fallback_host, self.fallback_port, self.fallback_protocol)
+            except ValueError as exc:
+                raise ValueError("备用地址：" + str(exc)) from None
+
+    @staticmethod
+    def validate_address(host, port, protocol):
+        host = host.strip().strip("[]")
         try:
-            ipaddress.ip_address(self.host)
+            ipaddress.ip_address(host)
         except ValueError:
-            if not re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?", self.host):
+            if not re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?", host):
                 raise ValueError("服务器地址须为 IP 或域名，请勿包含协议、端口或路径")
-        if not 1 <= self.port <= 65535 or self.protocol not in {"http", "https"}:
+        if not 1 <= port <= 65535 or protocol not in {"http", "https"}:
             raise ValueError("端口须为 1–65535，协议须为 HTTP 或 HTTPS")
+        return host
 
     def validate(self):
         self.validate_endpoint()
@@ -116,7 +156,7 @@ def load_config(path, decrypt):
     raw = json.loads(path.read_text(encoding="utf-8"))
     encrypted = raw.pop("protected_api_key", "")
     allowed = Config.__dataclass_fields__.keys()
-    config = Config(**{k: v for k, v in raw.items() if k in allowed and k != "api_key"})
+    config = Config(**{k: v for k, v in raw.items() if k in allowed and k not in {"api_key", "preferred_endpoint"}})
     if config.theme not in ("system", "light", "dark"):
         config.theme = "system"
     try:
@@ -134,6 +174,7 @@ def load_config(path, decrypt):
 
 def save_config(path, config, encrypt):
     raw = asdict(config)
+    raw.pop("preferred_endpoint")  # The last reachable route is only a hint for this process.
     key = raw.pop("api_key")
     raw["protected_api_key"] = encrypt(key) if key else ""
     path.parent.mkdir(parents=True, exist_ok=True)

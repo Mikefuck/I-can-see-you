@@ -10,10 +10,12 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QPoint, QRect
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QPalette
 from focus_agent import gui
 from focus_agent import management_ui
+from focus_agent import motion
 from focus_agent.config import Config, load_config
 from focus_agent.store import EventStore
 from focus_agent.tracker import Application, SessionTracker
@@ -99,6 +101,35 @@ def statuses(window):
             if event["kind"] == "device_status"]
 
 
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_page_transition_preserves_the_window_background(make_window, monkeypatch, theme):
+    app, build = make_window
+    monkeypatch.setattr(motion, "animations_enabled", lambda: True)
+    window = build(theme=theme)
+    window.show()
+    app.processEvents()
+    window.timer.stop()
+    window.background.stop_motion()
+    stack = window.pages
+
+    def visible_page():
+        return window.grab(QRect(stack.mapTo(window, QPoint()), stack.size())).toImage()
+
+    # Include both directions and a change halfway through an earlier transition.
+    for index in (1, 2, 0, 2, 1):
+        expected = visible_page()
+        stack.setCurrentIndex(index)
+        stack.animation.pause()
+        assert stack.frame.isVisible()
+        assert stack.frame.before.toImage() == expected
+        assert visible_page() == expected
+        stack.animation.setCurrentTime(70)
+
+    destination = stack.frame.after.toImage()
+    stack.finish_transition()
+    assert visible_page() == destination
+
+
 def test_gui_controls_and_verified_account_switch(make_window, monkeypatch, tmp_path):
     app, build = make_window
     window = build()
@@ -141,6 +172,66 @@ def wait_job(app, window):
         app.processEvents()
         time.sleep(0.01)
     assert window.job_thread is None
+
+
+def test_backup_settings_save_through_primary_outage_without_new_device(make_window, monkeypatch, tmp_path):
+    app, build = make_window
+    window = build(host="public.example.com", port=443, protocol="https")
+    original = window.config
+    window.fallback_host.setText("192.168.1.10")
+    window.fallback_port.setValue(8080)
+    window.fallback_protocol.setCurrentText("http")
+
+    def verify(candidate):
+        candidate.preferred_endpoint = candidate.base_urls[1]
+        return {"account_id": 1, "username": "alice", "device_id": original.device_id, "retention_days": 365}
+
+    monkeypatch.setattr(gui, "check_connection", verify)
+    window.connection_job(True)
+    wait_job(app, window)
+    assert window.config.destination == original.destination
+    assert window.config.device_id == original.device_id
+    assert window.config.active_url == "http://192.168.1.10:8080"
+    assert "自动切换" in window.connection_note.text()
+    saved = load_config(tmp_path / "config.json", decrypt)
+    assert saved.fallback_host == "192.168.1.10" and saved.protocol == "https"
+    opened = []
+    monkeypatch.setattr(gui.webbrowser, "open", opened.append)
+    window.open_dashboard()
+    assert opened == [window.config.active_url]
+    # Rotating the token after logging in on the LAN route keeps the primary queue key.
+    window.use_management_token(window.config.active_url, "y" * 43)
+    wait_job(app, window)
+    assert window.config.host == original.host
+    assert window.config.destination == original.destination
+    assert window.config.device_id == original.device_id
+
+
+def test_backup_settings_are_dirty_and_locked_during_verification(make_window, monkeypatch):
+    app, build = make_window
+    window = build(fallback_host="192.168.1.10")
+    assert window.fallback_host.text() == "192.168.1.10"
+    window.fallback_port.setValue(8081)
+    assert window.dirty
+    entered, release = threading.Event(), threading.Event()
+
+    def verify(candidate):
+        entered.set()
+        assert release.wait(3)
+        raise RuntimeError("两个地址均离线")
+
+    monkeypatch.setattr(gui, "check_connection", verify)
+    window.connection_job(True)
+    try:
+        assert entered.wait(2)
+        assert not window.fallback_host.isEnabled()
+        assert not window.fallback_port.isEnabled()
+        assert not window.fallback_protocol.isEnabled()
+    finally:
+        release.set()
+    wait_job(app, window)
+    assert window.config.fallback_port == 8080
+    assert window.fallback_host.isEnabled() and window.dirty
 
 
 def wait_picker(app, picker):

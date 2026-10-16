@@ -891,6 +891,13 @@ class MainWindow(QMainWindow):
         self.protocol.addItems(["http", "https"])
         self.port = QSpinBox()
         self.port.setRange(1, 65535)
+        self.fallback_host = QLineEdit()
+        self.fallback_host.setPlaceholderText("可选，例如内网 192.168.1.10")
+        self.fallback_host.setMaxLength(253)
+        self.fallback_protocol = QComboBox()
+        self.fallback_protocol.addItems(["http", "https"])
+        self.fallback_port = QSpinBox()
+        self.fallback_port.setRange(1, 65535)
         self.key = QLineEdit()
         self.key.setEchoMode(QLineEdit.EchoMode.Password)
         self.key.setMaxLength(256)
@@ -900,20 +907,28 @@ class MainWindow(QMainWindow):
         self.account = QLabel("尚未关联账户")
         self.account.setObjectName("value")
         self.account.setMinimumHeight(36)
-        grid.addWidget(self._label("caption", "服务器 IP / 域名"), 0, 0, 1, 4)
+        grid.addWidget(self._label("caption", "主地址 · IP / 域名"), 0, 0, 1, 4)
         grid.addWidget(self.host, 1, 0, 1, 4)
         grid.addWidget(self._label("caption", "连接方式"), 0, 4)
         grid.addWidget(self.protocol, 1, 4)
         grid.addWidget(self._label("caption", "端口"), 0, 5)
         grid.addWidget(self.port, 1, 5)
-        grid.addWidget(self._label("caption", "上传密钥", 12), 2, 0, 1, 6)
-        grid.addWidget(self.key, 3, 0, 1, 6)
-        grid.addWidget(self._label("caption", "设备名称", 12), 4, 0, 1, 4)
-        grid.addWidget(self.device_name, 5, 0, 1, 4)
-        grid.addWidget(self._label("caption", "所属账户", 12), 4, 4, 1, 2)
-        grid.addWidget(self.account, 5, 4, 1, 2)
+        grid.addWidget(self._label("caption", "备用地址 · IP / 域名（可选）", 12), 2, 0, 1, 4)
+        grid.addWidget(self.fallback_host, 3, 0, 1, 4)
+        grid.addWidget(self._label("caption", "连接方式", 12), 2, 4)
+        grid.addWidget(self.fallback_protocol, 3, 4)
+        grid.addWidget(self._label("caption", "端口", 12), 2, 5)
+        grid.addWidget(self.fallback_port, 3, 5)
+        grid.addWidget(self._label("caption", "上传密钥", 12), 4, 0, 1, 6)
+        grid.addWidget(self.key, 5, 0, 1, 6)
+        grid.addWidget(self._label("caption", "设备名称", 12), 6, 0, 1, 4)
+        grid.addWidget(self.device_name, 7, 0, 1, 4)
+        grid.addWidget(self._label("caption", "所属账户", 12), 6, 4, 1, 2)
+        grid.addWidget(self.account, 7, 4, 1, 2)
         layout.addLayout(grid)
         layout.addWidget(self._label("hint", "首次保存或更换连接时会验证密钥，避免将缓存上传到错误账户。"))
+        layout.addWidget(self._label("hint", "两个地址须指向同一服务端、使用同一上传密钥。可将公网地址保留为主地址，内网地址填入备用地址；"
+                                     "连接失败时自动切换，后续优先使用最近成功的地址。备用留空时只使用主地址。"))
         return frame
 
     def _collection_section(self):
@@ -1038,6 +1053,9 @@ class MainWindow(QMainWindow):
         self.host.setText(config.host)
         self.port.setValue(config.port)
         self.protocol.setCurrentText(config.protocol)
+        self.fallback_host.setText(config.fallback_host)
+        self.fallback_port.setValue(config.fallback_port)
+        self.fallback_protocol.setCurrentText(config.fallback_protocol)
         self.key.setText(config.api_key)
         self.device_name.setText(config.device_name)
         self.show_startup_state(config.startup)
@@ -1061,10 +1079,11 @@ class MainWindow(QMainWindow):
     def _watch_settings(self):
         """Any edit on the settings page flags it until the settings are saved. Connected after _populate, and
         only to signals that programmatic updates do not emit (spin boxes are filled before this)."""
-        for edit in (self.host, self.key, self.device_name):
+        for edit in (self.host, self.fallback_host, self.key, self.device_name):
             edit.textEdited.connect(self.mark_dirty)
         self.protocol.activated.connect(self.mark_dirty)
-        for spin in (self.port, self.idle, self.interval, self.battery_interval):
+        self.fallback_protocol.activated.connect(self.mark_dirty)
+        for spin in (self.port, self.fallback_port, self.idle, self.interval, self.battery_interval):
             spin.valueChanged.connect(self.mark_dirty)
         for box in (self.startup, self.silent, self.battery, self.shutdown_upload, self.suspend_upload):
             box.clicked.connect(self.mark_dirty)
@@ -1197,6 +1216,8 @@ class MainWindow(QMainWindow):
         if self.config.host and self.config.account_id:
             device_ids[self.config.destination] = self.config.device_id
         config = replace(self.config, host=self.host.text(), port=self.port.value(),
+            fallback_host=self.fallback_host.text(), fallback_port=self.fallback_port.value(),
+            fallback_protocol=self.fallback_protocol.currentText(),
             protocol=self.protocol.currentText(), api_key=self.key.text().strip(), device_name=self.device_name.text(),
             startup=self.startup.isChecked(), silent_start=self.silent.isChecked(),
             idle_seconds=self.idle.value(), upload_seconds=self.interval.value(),
@@ -1214,7 +1235,7 @@ class MainWindow(QMainWindow):
         except ValueError as exc:
             QMessageBox.warning(self, "设置有误", str(exc))
             return
-        connection_changed = (candidate.base_url, candidate.api_key) != (self.config.base_url, self.config.api_key)
+        connection_changed = (candidate.base_urls, candidate.api_key) != (self.config.base_urls, self.config.api_key)
         if saving and self.config.configured and not connection_changed:
             self.apply_config(candidate)
             return
@@ -1248,7 +1269,7 @@ class MainWindow(QMainWindow):
             self.connection_note.setText("验证失败：" + error)
             return
         candidate = self.job_candidate.bind_account(result["account_id"], result["username"], result.get("device_id"))
-        self.connection_note.setText(f"账户与设备上传验证成功 · {candidate.username} · 服务端保留 {result['retention_days']} 天")
+        self.connection_note.setText(f"账户与设备上传验证成功 · {candidate.username} · {candidate.active_url} · 服务端保留 {result['retention_days']} 天")
         if self.job_saving:
             self.apply_config(candidate)
         else:
@@ -1283,7 +1304,8 @@ class MainWindow(QMainWindow):
         self.account.setText(candidate.username)
         self.show_startup_state(candidate.startup)
         self.set_dirty(False)
-        self.connection_note.setText("设置已保存。" + ("HTTP 连接适用于可信内网；公网请选择 HTTPS。" if candidate.protocol == "http" else "HTTPS 证书会进行验证。"))
+        self.connection_note.setText("设置已保存。" + (f"连接失败时自动切换地址 · {candidate.active_url}" if len(candidate.base_urls) > 1
+            else "HTTP 连接适用于可信内网；公网请选择 HTTPS。" if candidate.protocol == "http" else "HTTPS 证书会进行验证。"))
         if was_running:
             self.start_collection()
         else:
@@ -1590,18 +1612,23 @@ class MainWindow(QMainWindow):
             if not self.config.configured:
                 return
             config = self.config
-        webbrowser.open(config.base_url)
+        current = getattr(self.uploader, "config", self.config)
+        webbrowser.open(current.active_url if current.base_urls == config.base_urls else config.active_url)
 
     def management_endpoint(self):
-        config = replace(self.config, host=self.host.text(), port=self.port.value(), protocol=self.protocol.currentText())
+        config = replace(self.config, host=self.host.text(), port=self.port.value(), protocol=self.protocol.currentText(),
+                         fallback_host=self.fallback_host.text(), fallback_port=self.fallback_port.value(),
+                         fallback_protocol=self.fallback_protocol.currentText())
         config.validate_endpoint()
         return config
 
     def use_management_token(self, base_url, api_key):
         endpoint = urlsplit(base_url)
-        self.host.setText(endpoint.hostname)
-        self.port.setValue(endpoint.port or (443 if endpoint.scheme == "https" else 80))
-        self.protocol.setCurrentText(endpoint.scheme)
+        # Logging in through the alternate route must not change the queue's primary address.
+        if base_url not in self.management_endpoint().base_urls:
+            self.host.setText(endpoint.hostname)
+            self.port.setValue(endpoint.port or (443 if endpoint.scheme == "https" else 80))
+            self.protocol.setCurrentText(endpoint.scheme)
         self.key.setText(api_key)
         self.mark_dirty()
         self.show_page(self.SETTINGS)

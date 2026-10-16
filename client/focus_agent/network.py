@@ -46,16 +46,38 @@ def rejected_event_indexes(error):
 
 def request_json(config, path, body=None, method=None):
     data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
-    request = urllib.request.Request(config.base_url + path, data=data,
+    urls = config.connection_urls
+    for index, base_url in enumerate(urls):
+        try:
+            result = _request_json(config, base_url, path, data, body, method,
+                                   timeout=3 if len(urls) > 1 else 10)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            if isinstance(exc, urllib.error.HTTPError):
+                exc.close()
+            if index + 1 < len(urls):
+                continue
+            if isinstance(exc, urllib.error.HTTPError):
+                raise RuntimeError(f"服务器返回 HTTP {exc.code}，两个地址均无法完成请求" if len(urls) > 1
+                                   else f"服务器返回 HTTP {exc.code}") from None
+            raise RuntimeError("两个服务器地址均无法连接，请检查地址、端口、网络和 HTTPS 证书" if len(urls) > 1
+                               else "无法连接服务器，请检查地址、端口、网络和 HTTPS 证书") from exc
+        config.preferred_endpoint = base_url
+        return result
+
+
+def _request_json(config, base_url, path, data, body, method, timeout):
+    request = urllib.request.Request(base_url + path, data=data,
         headers={"Authorization": "Bearer " + config.api_key, "Content-Type": "application/json",
                  "User-Agent": "FocusLedger/" + __version__}, method=method)
     try:
-        with urllib.request.build_opener(NoRedirect).open(request, timeout=10) as response:
+        with urllib.request.build_opener(NoRedirect).open(request, timeout=timeout) as response:
             raw = response.read(1024 * 1024 + 1)
             if len(raw) > 1024 * 1024:
                 raise ValueError("服务器响应过大")
             return json.loads(raw)
     except urllib.error.HTTPError as exc:
+        if exc.code >= 500:
+            raise
         if path == "/api/v1/agent/app-aliases" and exc.code in (404, 405):
             raise AliasSyncUnavailable("服务端不支持历史名称同步，请升级服务端") from None
         if exc.code == 422 and body is not None:
@@ -65,8 +87,6 @@ def request_json(config, path, body=None, method=None):
         messages = {401: "上传密钥无效或账户已停用", 409: "设备身份或记录冲突", 422: "记录格式或设备时钟错误",
                     413: "上传包过大", 429: "请求过于频繁"}
         raise RuntimeError(messages.get(exc.code, f"服务器返回 HTTP {exc.code}")) from None
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise RuntimeError("无法连接服务器，请检查地址、端口、网络和 HTTPS 证书") from exc
 
 
 def check_connection(config):
@@ -84,7 +104,8 @@ def check_connection(config):
         "platform": "windows", "agent_version": __version__}, "events": []})
     if not isinstance(response, dict) or response.get("acknowledged_ids") != []:
         raise RuntimeError("服务器未确认设备上传测试，请检查上传接口")
-    return {**result, "device_id": bound.device_id, "upload_verified": True}
+    config.preferred_endpoint = bound.active_url
+    return {**result, "device_id": bound.device_id, "upload_verified": True, "connected_url": bound.active_url}
 
 
 class Uploader:
@@ -103,7 +124,9 @@ class Uploader:
 
     def configure(self, config):
         with self.lock:
-            self.config = replace(config)
+            preferred = (self.config.active_url if self.config.base_urls == config.base_urls and
+                         self.config.api_key == config.api_key else config.active_url)
+            self.config = replace(config, preferred_endpoint=preferred)
             self.alias_state = None
         self.wake.set()
 
@@ -137,7 +160,7 @@ class Uploader:
 
     def sync_aliases(self, config):
         """Retry from the saved config after outages/restarts; cache only confirmed snapshots."""
-        signature = (config.base_url, config.api_key, config.device_id, tuple(sorted(config.app_aliases.items())))
+        signature = (config.base_urls, config.api_key, config.device_id, tuple(sorted(config.app_aliases.items())))
         with self.lock:
             state = self.alias_state
         if state is not None and state[0] == signature:
@@ -167,7 +190,8 @@ class Uploader:
             # Clear before snapshot/upload so a configuration change during the request is not lost.
             self.wake.clear()
             with self.lock:
-                config = replace(self.config)
+                # configure() replaces the object; keep this snapshot so successful routes survive retries.
+                config = self.config
             wait = config.upload_seconds
             if config.configured:
                 try:
@@ -190,7 +214,8 @@ class Uploader:
                         self.messages.put((False, "记录已上传 · " + warning))
                     else:
                         self.messages.put((True, "上传成功 · " + time.strftime("%H:%M:%S") +
-                                           (" · 名称已同步" if config.app_aliases else "")))
+                                           (" · 名称已同步" if config.app_aliases else "") +
+                                           (" · " + config.active_url if len(config.base_urls) > 1 else "")))
                     if self.store.counts(config.destination)[0]:
                         wait = 1
                 except RejectedEvents as exc:

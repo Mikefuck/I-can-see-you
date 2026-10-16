@@ -4,7 +4,7 @@
 
 ## 下载与快速开始
 
-2026-10-15 发布：客户端 **0.2.3**，服务端镜像 **2026.10.15-r6**，新增两端页面切换与选项交互动画，包含深浅色主题、系统进程批量选择和历史应用名同步。客户端支持 Windows 10 / 11 x64，服务端镜像支持 Linux x86_64 / amd64。
+2026-10-16 客户端 **0.2.5**：支持公网 / 内网双地址及连接失败自动切换，沿用同一设备和待上传缓存；服务端镜像继续使用 **2026.10.15-r6**。两端支持页面切换与选项交互动画，包含深浅色主题、系统进程批量选择和历史应用名同步。客户端支持 Windows 10 / 11 x64，服务端镜像支持 Linux x86_64 / amd64。
 
 | 文件 | 用法 |
 | --- | --- |
@@ -51,7 +51,7 @@ tools/package_release.py      联合打包工具
 
 ## 已实现
 
-- Windows GUI：服务器 IP / 域名、端口、HTTP / HTTPS、上传密钥、设备名称、启动方式、电池及关机/休眠上传选项、应用名翻译、实际上传连接测试、采集状态、最近记录。
+- Windows GUI：公网 / 内网双地址（分别设置协议和端口，连接失败自动切换）、上传密钥、设备名称、启动方式、电池及关机/休眠上传选项、应用名翻译、实际上传连接测试、采集状态、最近记录。
 - 客户端「服务端」页：登录后生成自己的上传密钥并自动接入；管理员可查看 / 创建 / 启停用户、修改数据保留天数。管理密码和会话只保存在内存；运行天数持久化到服务端数据库。端口映射与 HTTPS 证书仍由服务器部署配置管理。
 - 每秒采样前台应用，记录应用名称、进程名、起止时间和使用秒数；商店（UWP）应用识别为实际应用进程，而不是 ApplicationFrameHost。按设置记录电池和系统生命周期状态。**不采集窗口标题、截图、键盘输入、文件内容或进程完整路径。**
 - 登录 Windows 后启动、静默进入系统托盘、托盘打开设置 / 暂停 / 上传 / 退出；再次运行程序会唤出已在托盘运行的主窗口。首次使用必须配置后开始采集。
@@ -74,6 +74,8 @@ tools/package_release.py      联合打包工具
 
 将 `server/release/FocusLedger-server-docker.zip` 上传到 Linux x86_64 服务器。服务器需要事先安装 Docker Engine 和 Compose 插件；导入和运行发布包不需要联网下载依赖。
 
+以下用于首次部署。已有服务请按 [服务端升级步骤](server/README.md#从旧版本升级--修改管理员密码) 将配置指向原数据卷，保留原 `.env`。
+
 ```bash
 unzip FocusLedger-server-docker.zip
 cd server
@@ -81,6 +83,7 @@ sha256sum -c IMAGE-SHA256SUMS.txt
 docker load -i FocusLedger-server-linux-amd64.tar
 cp .env.example .env
 nano .env
+docker volume create focusledger-data  # 首次部署；自定义卷名时与 FOCUSLEDGER_DATA_VOLUME 一致
 docker compose up -d
 docker compose ps
 docker compose logs -f server
@@ -97,7 +100,7 @@ docker compose logs -f server
 
 公网部署请用已有的 HTTPS 反向代理并设 `SECURE_COOKIES=true`。客户端地址填写证书匹配的域名，协议选 `https`、端口填反向代理端口（通常443）。反向代理将整个站点转发到容器8080端口，上传包限制至少2MiB；不要配置重定向作为客户端的最终地址。内网 HTTP 使用时，保持 `SECURE_COOKIES=false`。
 
-数据库保存在 Docker 命名卷 `focus-data`，容器重建后仍保留。`docker compose down` 保留数据，**`docker compose down -v` 会删除数据**。如保留备份，备份也需执行相同的最长一年保留策略。
+标准配置把数据库保存在固定名称的外部数据卷，默认 `focusledger-data`，由 `.env` 中的 `FOCUSLEDGER_DATA_VOLUME` 指定；容器重建、Compose 项目改名和 `docker compose down -v` 都会保留此卷。**已有命名卷部署必须填写旧卷的实际名称（例如 `server_focus-data`），否则无法读取旧记录；旧版配置的 `down -v` 仍会删除其管理的卷。** 面板版使用编排文件同目录的 `focus-data` 文件夹，须先按服务端教程创建并设置 UID/GID `10001:10001` 的读写权限；从旧卷切换时先停服迁移完整数据，移动编排文件时也要迁移该文件夹。如保留备份，备份也需执行相同的最长一年保留策略。
 
 更新、备份、HTTPS、参数说明和故障处理见 [服务端完整教程](server/README.md)。默认 Compose 使用已导入镜像；从源码部署请在 `server` 目录运行 `docker compose -f compose.yaml -f compose.build.yaml up -d --build`。
 
@@ -111,7 +114,7 @@ docker compose logs -f server
 
 也可以使用 `client/release/FocusLedger-windows-x64.zip`，解压后运行 `FocusLedger/FocusLedger.exe`。文件夹版必须保留**整个 FocusLedger 文件夹**和 `_internal` 依赖目录，不能只取其中的小 EXE。两种版本共用配置与队列。
 
-1. 在 GUI 中填写服务器 IP / 域名、端口、协议、上传密钥和设备名称。
+1. 在 GUI 中填写服务器主地址、端口、协议、上传密钥和设备名称；已有公网连接时保留原主地址，将内网 IP、端口和协议填入备用地址。两个地址须指向同一服务端，连接失败时自动切换，备用留空时沿用单地址。
 2. 点击「保存设置」，首次保存会联网验证账户。
 3. 点击「开始采集」。关闭窗口后仍在系统托盘运行；从托盘右键可以暂停或退出。
 4. 勾选「登录 Windows 后自动启动」和 / 或「静默启动」，再次保存。开机启动实际发生在**当前用户登录后**，不需要管理员权限。
@@ -155,6 +158,7 @@ Get-FileHash client\release\FocusLedger-Setup-windows-x64.exe -Algorithm SHA256
 首次保存 / 更换服务器或密钥时必须成功验证连接，保证队列绑定的是确定的服务器和账户。已验证的账户可以离线修改设备名称、上传间隔等其他设置。
 
 - 同一账户重置密钥：队列和设备 ID 保持，更新密钥后补传。
+- 同一服务端的公网 / 内网地址：在原主地址旁添加备用地址，自动切换时设备 ID 与队列保持；双地址都不可用时继续本地缓存。
 - 切换到不同账户或服务器：使用新的设备 ID，旧队列保留在原连接下，不会被发给新账户。
 - 切回原账户可以继续补传其旧队列；清空缓存前客户端会要求确认。
 - 同一设备 UUID 不能同时属于两个账户。

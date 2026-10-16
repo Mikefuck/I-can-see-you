@@ -2,6 +2,8 @@
 # 必须先将下面的 ADMIN_PASSWORD 替换成自己的 12–256 位密码。
 # 密码如含 $，每个 $ 写成 $$；普通英文单引号不会阻止 Compose 变量替换。
 # r4 起变更密码并重新部署后会同步到已有管理员，保留历史记录。
+# 数据保存在本编排文件同目录的 focus-data 文件夹；部署前创建并赋予 UID/GID 10001 写权限。
+# 具体命令见 README；已有命名卷数据须先停服并迁移到此文件夹，再重新部署。
 services:
   server:
     image: focusledger-server:2026.10.15-r6
@@ -9,7 +11,7 @@ services:
     pull_policy: never
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8077:8080"
     environment:
       ADMIN_USERNAME: "admin"
       ADMIN_PASSWORD: "REPLACE_WITH_YOUR_OWN_PASSWORD"
@@ -17,7 +19,13 @@ services:
       SECURE_COOKIES: "false"
       DATA_DIR: /data
     volumes:
-      - focus-data:/data
+      - type: bind
+        source: ./focus-data
+        target: /data
+        read_only: false
+        bind:
+          # 先按 README 创建目录并设置权限，避免自动生成 root 所有的目录。
+          create_host_path: false
     init: true
     read_only: true
     tmpfs:
@@ -31,5 +39,3 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-volumes:
-  focus-data:

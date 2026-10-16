@@ -6,6 +6,8 @@
 
 把 `server/release/FocusLedger-server-docker.zip` 上传至服务器。该包包含可直接导入的镜像、配置示例、本教程和源码。
 
+以下步骤用于首次部署。已有服务请先阅读「从旧版本升级 / 修改管理员密码」，确认原数据卷名称并保留原 `.env`，再更新配置。
+
 ```bash
 unzip FocusLedger-server-docker.zip
 cd server
@@ -18,6 +20,7 @@ nano .env
 在与 `compose.yaml` 同目录的 `.env` 中填写 `ADMIN_PASSWORD`，密码为 12–256 个字符。管理员用户名默认 `admin`；如需修改，设置 `ADMIN_USERNAME`，只允许 3–40 位英文字母、数字、`_`、`.`、`-`，不能使用中文或空格。建议把密码用英文单引号包起来，例如 `ADMIN_PASSWORD='你自己设置的长密码'`，避免密码中的 `$` 被 Compose 当作变量。不要把 `.env` 分享给其他人。
 
 ```bash
+docker volume create focusledger-data  # 仅首次部署；自定义卷名时与 FOCUSLEDGER_DATA_VOLUME 一致
 docker compose up -d
 docker compose ps
 docker compose logs --tail=100 server
@@ -32,6 +35,19 @@ docker compose logs --tail=100 server
 ## 在面板中粘贴 Compose 配置
 
 如果面板报 `required variable ADMIN_PASSWORD is missing a value`，说明它没有读到 `.env` 中的密码。可使用无需 `.env` 的 [compose.panel.yaml](compose.panel.yaml)：先导入镜像，再把文件内容粘贴到原编排项目，将 `ADMIN_PASSWORD` 的占位文字替换成自己设置的 12–256 位密码，保存并重新部署。
+
+面板版把编排文件同目录的 `./focus-data` 文件夹挂载到容器 `/data`，数据库位于该文件夹中的 `focus.sqlite3`。相对路径以面板实际保存编排文件的目录为准；在面板中确认该目录后，进入服务器终端执行以下命令。服务使用 UID/GID `10001:10001`，需要对目录及数据库文件有读写权限：
+
+```bash
+cd /实际的编排文件所在目录
+sudo mkdir -p ./focus-data
+sudo chown -R 10001:10001 ./focus-data
+sudo chmod -R u+rwX ./focus-data
+```
+
+如果已经是 root 用户，可以省略 `sudo`。本配置使用 `create_host_path: false`，目录缺失时会明确报错；创建并设置权限后再在面板重新部署。这里不需要创建 Docker 命名卷，也不读取 `FOCUSLEDGER_DATA_VOLUME`。服务级的 `read_only: true` 可以保留，`/data` 挂载单独设置为可写。
+
+**已有数据时**：若当前已经挂载同一个 `./focus-data`，停服后修正该文件夹的权限即可。若原数据在 Docker 命名卷或其他目录中，先停止旧服务，将原容器 `/data` 的完整内容（含存在的 WAL / SHM 文件）复制到这个文件夹，再设置权限并切换挂载；不要用空文件夹替代旧数据。以后升级应保持此目录不变，迁移部署目录时也要一并迁移数据文件夹。
 
 密码直接写在 YAML 中时，如果包含 `$`，每个 `$` 要写为 `$$`，避免 Compose 将后面的内容解释为变量。不要分享已填写真实密码的配置。修改密码后须重新部署 / 重新创建容器，单纯点击「重启」不会更新容器环境变量。
 
@@ -48,6 +64,7 @@ docker compose -f compose.panel.yaml up -d --force-recreate server
 | `ADMIN_USERNAME` | 首次创建或同步密码的管理员用户名，默认 `admin`；3–40 位英文字母、数字、`_`、`.`、`-`；已有数据库时必须对应已启用的管理员，不用于重命名或提升普通成员权限 |
 | `ADMIN_PASSWORD` | 管理员密码，必须自行填写，12–256 个字符；更改并重新创建容器后同步生效 |
 | `FOCUSLEDGER_IMAGE` | 本地镜像标签，默认 `focusledger-server:2026.10.15-r6` |
+| `FOCUSLEDGER_DATA_VOLUME` | 标准 Compose / 源码构建使用的固定外部数据卷名，默认 `focusledger-data`；新装需先创建，已有部署填写旧卷实际名称；面板版使用 `./focus-data` 文件夹，不读取此变量 |
 | `SERVER_PORT` | 对外端口，默认 `8080`；容器内部始终使用 `8080` |
 | `BIND_HOST` | 监听地址，默认 `0.0.0.0`；同机反向代理可设置 `127.0.0.1` |
 | `RETENTION_DAYS` | 初始数据保留天数，1–365，默认 365；客户端管理页保存后以数据库中的值为准 |
@@ -57,10 +74,24 @@ docker compose -f compose.panel.yaml up -d --force-recreate server
 
 ## 从旧版本升级 / 修改管理员密码
 
-1. 保留原 Compose 项目和 `focus-data` 数据卷，在原部署目录操作。先按下文备份数据库。
+以下数据卷步骤适用于标准 `compose.yaml` 和继续使用命名卷的旧面板配置。当前面板版使用 `./focus-data` 文件夹，按上一节准备或迁移数据，升级时保持该目录不变；镜像与管理员密码的更新方式相同。
+
+旧版已经把 `/data` 挂载到命名卷，但实际卷名由 Compose 项目名派生（通常为 `server_focus-data`）。仅更新容器本身不会清空数据；换部署目录或新建面板项目会选中另一个卷，看起来像数据丢失。标准配置改为显式指定实际卷名，并用 `external: true` 将卷的生命周期独立出来。
+
+**替换旧配置之前**，在原部署目录查询现有容器的卷名（单文件部署时给 `docker compose` 加上 `-f compose.panel.yaml`）：
+
+```bash
+docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$(docker compose ps -a -q server)"
+```
+
+也可以在面板的原容器挂载信息中查看 `/data` 对应的数据卷。假如输出为 `server_focus-data`，在原 `.env` 中添加 `FOCUSLEDGER_DATA_VOLUME=server_focus-data`；继续使用命名卷的旧面板配置则保留 `focus-data:/data`，并将顶层 `volumes.focus-data.name` 设为 `server_focus-data`、`external` 设为 `true`。**使用查询到的真实名称，不要照抄示例或为了消除报错创建一个新空卷。** 这一步直接沿用旧卷，无需复制数据库或改权限。
+
+如果原容器已删除，可先用 `docker volume ls` 查找旧项目的卷，并通过旧配置 / 面板信息确认。未确认前不要删除卷；只要旧卷仍在，重新挂载后就能读取其中的记录。
+
+1. 在原部署目录按下文备份数据库，并记录上述原卷名；不要对旧版配置执行 `docker compose down -v`。
 2. 将新发布包中的 TAR 上传到服务器，执行 `docker load -i FocusLedger-server-linux-amd64.tar`。
-3. 把原编排项目的 `image` 改为 `focusledger-server:2026.10.15-r6`；使用 `.env` 时同步修改 `FOCUSLEDGER_IMAGE`。`ADMIN_USERNAME` 填现有已启用的管理员用户名，`ADMIN_PASSWORD` 填 12–256 个字符的密码。
-4. 在 1Panel 保存并重新部署原编排项目，或执行 `docker compose up -d --force-recreate server`。不要新建另一个 Compose 项目，以免挂载到空数据卷。
+3. 更新 Compose，保持 `focus-data:/data` 挂载，并按上文将外部卷名指向旧卷。把 `image` 改为 `focusledger-server:2026.10.15-r6`；使用 `.env` 时同步修改 `FOCUSLEDGER_IMAGE`。`ADMIN_USERNAME` 填现有已启用的管理员用户名，`ADMIN_PASSWORD` 填 12–256 个字符的密码。
+4. 在 1Panel 保存并重新部署原编排项目，或执行 `docker compose up -d --force-recreate server`。如果更换项目，先停止旧项目，并在新项目中使用相同的外部卷名；同一数据库只运行一个服务端实例。
 5. 查看 `docker compose logs --tail=100 server`，服务健康后使用配置中的用户名和密码登录。
 
 **r4 第一次启动会把 Compose 密码同步到对应管理员，解决旧数据库仍使用旧密码的问题。** 此后只在 Compose 密码变化时再次同步；Compose 密码不变时，在网页「账户」修改的密码可以跨重启保留。同步会注销该管理员的旧登录会话，其他用户会话、用户权限、历史记录、上传密钥和数据保留期不受影响。数据库只保存密码的加盐哈希。
@@ -92,7 +123,9 @@ docker compose down                    # 删除容器，保留数据卷
 docker compose up -d                   # 重新创建并启动
 ```
 
-数据库保存在 `focus-data` 命名卷，实际名称通常为 `server_focus-data`，以 `docker volume ls` 为准。**`docker compose down -v` 会删除数据库。** 容器以 UID 10001 的普通用户运行；默认根文件系统只读，数据卷可写。保持同一个部署目录和 Compose 项目名称，更新才能继续使用原数据卷。
+数据库文件为 `/data/focus.sqlite3`，应持久化整个 `/data`（包含 SQLite 的 WAL / SHM 文件）。标准配置使用外部命名卷：`focus-data` 只是 Compose 内的引用，实际名称由 `FOCUSLEDGER_DATA_VOLUME` 指定，默认 `focusledger-data`。卷名固定后，部署目录或 Compose 项目名变化不会切换到空卷；更新时保持该名称不变。面板版使用编排文件同目录的 `focus-data` 文件夹，重建容器会继续使用该目录，移动编排文件时必须一并迁移数据文件夹。
+
+按 [Docker 的外部卷规则](https://docs.docker.com/reference/compose-file/volumes/#external)，标准配置的卷必须提前存在，Compose 不会自动创建；本版配置的 [`docker compose down -v`](https://docs.docker.com/reference/cli/docker/compose/down/) 也不会删除外部卷或面板版绑定的宿主机文件夹。显式删除数据卷或文件夹、面板的清理操作，以及旧版 Compose 配置的 `down -v` 仍可能删除数据。容器继续以 UID 10001 的普通用户运行，根文件系统只读；新命名卷会沿用镜像中 `/data` 的权限，面板版宿主机文件夹则需按上文手动设置权限。
 
 升级时先备份，把新的镜像导入，在 `.env` 中将 `FOCUSLEDGER_IMAGE` 改成新发布的标签，再执行：
 
@@ -122,6 +155,7 @@ docker compose start server
 ```bash
 cp .env.example .env  # 已有 .env 时不要执行此行
 nano .env
+docker volume create focusledger-data  # 仅首次部署；已有部署复用 FOCUSLEDGER_DATA_VOLUME 指定的原卷
 docker compose -f compose.yaml -f compose.build.yaml up -d --build
 ```
 
@@ -153,6 +187,10 @@ docker save -o release/FocusLedger-server-linux-amd64.tar focusledger-server:202
 
 ## 常见问题
 
+- **`unable to open database file`**：面板版先检查 `focus-data` 文件夹及已有数据库文件是否对 UID/GID `10001:10001` 可读写，并确认实际挂载目标是 `/data` 且可写。按面板部署章节设置权限后重新部署。
+- **`bind source path does not exist`**：面板版配置要求预先创建编排文件同目录的 `focus-data` 文件夹并设置权限，详见上文。
+- **`external volume ... not found`**：使用标准配置或旧命名卷配置时，新装先运行 `docker volume create focusledger-data`（自定义名称时使用对应名称）；已有部署请核对实际卷名，避免创建空卷后误以为旧数据丢失。当前面板版使用文件夹，不需要命名卷。
+- **更新后记录为空**：先检查当前 `/data` 挂载的实际卷名或宿主机目录，再查找旧卷或目录；改回原挂载或停服迁移完整数据。单纯改镜像或重建容器不会清空正确挂载的数据。
 - **`ADMIN_USERNAME is required` / 旧版 `First start requires ADMIN_USERNAME`**：容器没有收到合法的管理员用户名。使用本项目 `compose.yaml` 时默认用户名为 `admin`；如在 `.env` 中自定义，请检查是否含中文、空格或长度不符。修改后执行 `docker compose up -d --force-recreate server`。在面板中手动创建容器时，须在容器环境变量中同时设置 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD`；仅导入镜像不会设置账号。
 - **找不到镜像 / pull access denied**：先执行 `docker load`，再用 `docker image ls` 确认标签与 `.env` 中的 `FOCUSLEDGER_IMAGE` 完全一致。
 - **端口被占用**：修改 `.env` 中的 `SERVER_PORT` 后执行 `docker compose up -d`，客户端端口也要同步修改。
