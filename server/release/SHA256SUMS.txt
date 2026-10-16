@@ -1,2 +1,2 @@
-1c7f95aba9cf3ab2c82a49dbb43d365926c084e581467071149ed1de8d3d67de  FocusLedger-server-linux-amd64.tar
-42627da27fd11d7a9deebe8dbdc86fbd0762f9949e8d83448bf1987cbe805584  FocusLedger-server-docker.zip
+9c1ce7fb5295da3ee6e1f02baf3f87ee1fd3d0542867a13daa9c34eaad36e0a9  FocusLedger-server-linux-amd64.tar
+184a86fa3802eb57e6d3b20d0d9b0fbbd21253ed32856ab0fb6d6f037cf23304  FocusLedger-server-docker.zip
