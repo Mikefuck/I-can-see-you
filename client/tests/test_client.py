@@ -116,6 +116,79 @@ def test_status_events_share_durable_queue_and_batch(tmp_path):
     assert store.recent(first.destination)[0][0] == record
 
 
+def test_app_change_option_defaults_off_and_roundtrips(tmp_path):
+    path = tmp_path / "config.json"
+    assert not load_config(path, lambda text: text).upload_on_app_change
+    first = config(upload_on_app_change=True)
+    first.validate()
+    save_config(path, first, lambda text: text)
+    assert load_config(path, lambda text: text).upload_on_app_change
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw.pop("upload_on_app_change")
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    assert not load_config(path, lambda text: text).upload_on_app_change
+    with pytest.raises(ValueError, match="前台应用变化"):
+        replace(first, upload_on_app_change="true").validate()
+
+
+def test_foreground_observations_only_wake_on_change_and_stay_account_bound(tmp_path):
+    from focus_agent.network import Uploader
+
+    first = config()
+    uploader = Uploader(EventStore(tmp_path / "db"), first)
+    uploader.observe_foreground(APP, 1000)
+    assert uploader.foreground is None and not uploader.wake.is_set()
+    uploader.configure(replace(first, upload_on_app_change=True))
+    uploader.wake.clear()
+    uploader.observe_foreground(APP, 1000)
+    assert uploader.wake.is_set()
+    since = uploader.foreground["since"]
+    uploader.wake.clear()
+    uploader.observe_foreground(APP, 1030)
+    assert not uploader.wake.is_set() and uploader.foreground["since"] == since
+    assert uploader.foreground["observed_at"] != since
+    uploader.observe_foreground(None, 1031)
+    assert uploader.wake.is_set() and uploader.foreground["app"] is None
+    uploader.configure(replace(first, upload_on_app_change=True, account_id=2))
+    assert uploader.foreground is None
+    uploader.observe_foreground(APP, 1032)
+    uploader.configure(first)
+    assert uploader.foreground is None
+
+
+def test_old_server_uploads_usage_without_foreground_and_shows_upgrade_message(tmp_path, monkeypatch):
+    from focus_agent import network
+
+    first, store = config(upload_on_app_change=True), EventStore(tmp_path / "db")
+    usage = event()
+    store.add(first, [usage])
+    calls = []
+
+    def request(current, path, body=None, method=None):
+        calls.append((path, body))
+        if path == "/api/v1/agent/check":
+            return {"features": ["app_usage", "device_status"]}
+        if path == "/api/v1/agent/app-aliases":
+            return {"ok": True, "device_id": current.device_id, "app_aliases": {}}
+        if path == "/api/v1/agent/app-colors":
+            return {"ok": True, "device_id": current.device_id, "app_colors": {}}
+        assert path == "/api/v1/usage/batches" and "foreground" not in body
+        return {"acknowledged_ids": [item["id"] for item in body["events"]]}
+
+    monkeypatch.setattr(network, "request_json", request)
+    uploader = network.Uploader(store, first)
+    uploader.observe_foreground(APP, time.time())
+    uploader.start()
+    try:
+        ok, message = uploader.messages.get(timeout=3)
+        assert not ok and "升级服务端" in message
+        assert store.counts(first.destination) == (0, 0)
+        assert calls[1][1]["events"] == [usage]
+    finally:
+        uploader.stop()
+        uploader.thread.join(3)
+
+
 def test_day_query_returns_sent_and_pending_records_of_one_connection(tmp_path):
     store, first = EventStore(tmp_path / "db"), config()
     other = replace(first, account_id=2)
@@ -220,6 +293,8 @@ def test_uploader_sets_aside_rejected_event_and_uploads_the_rest(tmp_path, monke
     def fake_request(config, path, body=None, method=None):
         if path == "/api/v1/agent/app-aliases":
             return {"ok": True, "device_id": config.device_id, "app_aliases": body["app_aliases"]}
+        if path == "/api/v1/agent/app-colors":
+            return {"ok": True, "device_id": config.device_id, "app_colors": body["app_colors"]}
         calls.append([e["id"] for e in body["events"]])
         if len(calls) == 1:
             raise network.RejectedEvents({1})

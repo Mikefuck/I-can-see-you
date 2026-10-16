@@ -41,7 +41,7 @@ class EventStore:
                 [(event["id"], config.destination, device, json.dumps(event, ensure_ascii=False),
                   datetime.fromisoformat(event.get("ended_at") or event["occurred_at"]).timestamp()) for event in events])
 
-    def batch(self, destination, limit=200):
+    def batch(self, destination, limit=500):
         with self.connect() as db:
             rows = db.execute("SELECT * FROM events WHERE destination=? AND sent=0 ORDER BY ended_at LIMIT ?",
                               (destination, limit)).fetchall()

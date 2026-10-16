@@ -238,6 +238,10 @@ class MotionComboBox(QComboBox):
         self.selection = MotionValue(self, duration=220)
         self.activated.connect(self._selected)
 
+    def wheelEvent(self, event):
+        # Keep page scrolling available without accidentally switching the selected protocol.
+        event.ignore()
+
     def _selected(self, index):
         self.selection.jump(1.0)
         self.selection.to(0)

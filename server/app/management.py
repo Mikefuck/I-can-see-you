@@ -28,7 +28,7 @@ class RuntimeSettings(StrictModel):
     retention_days: int = Field(ge=1, le=365, strict=True)
 
 
-def management_router(database, settings, require_user, require_admin, limiter, cookie):
+def management_router(database, settings, require_user, require_admin, limiter, cookie, notify):
     router = APIRouter(prefix="/api/v1/management")
 
     def authenticated(request, admin=False, mutation=False):
@@ -64,6 +64,7 @@ def management_router(database, settings, require_user, require_admin, limiter, 
         user = authenticated(request, mutation=True)
         with database.connect() as db:
             db.execute("DELETE FROM sessions WHERE token_hash=?", (user["session_hash"],))
+        notify(user["id"])
         response = JSONResponse({"ok": True})
         response.delete_cookie(cookie)
         return response
@@ -91,6 +92,7 @@ def management_router(database, settings, require_user, require_admin, limiter, 
                 identity = cursor.lastrowid
         except sqlite3.IntegrityError:
             raise HTTPException(409, "用户名已存在") from None
+        notify(identity, history=True)
         return {"id": identity, "username": body.username, "is_admin": body.is_admin, "enabled": True}
 
     @router.patch("/users/{user_id}")
@@ -105,6 +107,7 @@ def management_router(database, settings, require_user, require_admin, limiter, 
             if not body.enabled:
                 db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
                 db.execute("UPDATE users SET upload_hash=NULL WHERE id=?", (user_id,))
+        notify(user_id, history=True)
         return {"id": user_id, "enabled": body.enabled}
 
     @router.get("/settings")
@@ -117,6 +120,7 @@ def management_router(database, settings, require_user, require_admin, limiter, 
     def update_settings(body: RuntimeSettings, request: Request):
         authenticated(request, admin=True, mutation=True)
         database.set_retention_days(body.retention_days)
+        notify(0, history=True, metadata=True)
         return get_settings(request)
 
     @router.post("/token")

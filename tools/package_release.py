@@ -83,7 +83,8 @@ def package(server_only=False):
     deployment_files.extend(path for path in sorted((server / "app").rglob("*"))
                             if path.is_file() and "__pycache__" not in path.parts
                             and path.suffix not in {".pyc", ".pyo"})
-    deployment_files.extend(sorted((server / "docs").glob("*.png")))
+    deployment_files.extend(path for path in sorted((server / "docs").iterdir())
+                            if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"})
     assert all(path.is_file() for path in deployment_files), "Missing server deployment files"
     (server / "release").mkdir(parents=True, exist_ok=True)
     if not server_only:

@@ -22,7 +22,8 @@ def test_compose_password_change_preserves_data_and_revokes_only_admin_sessions(
         assert "data-board" in login(first).text
         add_member(first, "member")
         key = upload_key(first)
-        assert send(first, key, batch()).json()["inserted"] == 1
+        original = batch()
+        assert send(first, key, original).json()["inserted"] == 1
         member = TestClient(first.app)
         assert "data-board" in login(member, "member").text
         admin_cookies, member_cookies = dict(first.cookies), dict(member.cookies)
@@ -47,7 +48,7 @@ def test_compose_password_change_preserves_data_and_revokes_only_admin_sessions(
             assert [tuple(row) for row in db.execute(
                 "SELECT id,username,is_admin,enabled,upload_hash,shared,created_at FROM users ORDER BY id")] == users_before
             assert [tuple(row) for row in db.execute("SELECT * FROM events")] == events_before
-        assert send(restarted, key, batch()).status_code == 200
+        assert send(restarted, key, batch(device=original["device"]["id"])).status_code == 200
 
 
 def test_unchanged_compose_keeps_a_password_changed_on_the_website(tmp_path):

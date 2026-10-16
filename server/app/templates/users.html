@@ -4,7 +4,7 @@
 <header class="page-head">
   <p class="kicker">成员<small>Members</small></p>
   <h1 class="page-title">{{ users|length }} <span class="page-title-unit">个账户</span></h1>
-  <p class="lede">每个账户的设备和记录相互独立。成员自己决定是否公开；管理员在这里只看得到账户状态，看不到未公开的记录。</p>
+  <p class="lede">设备与上传密钥按账户管理。公开记录所有访客可见，未公开记录仅供已登录成员查看。</p>
 </header>
 
 <section class="sheet">
@@ -13,7 +13,7 @@
     <ul class="roster has-act">{% for u in users %}
       <li class="{{ '' if u.enabled else 'is-muted' }}">
         <div class="roster-main">
-          <b>{% if u.enabled and (u.shared or u.id == user.id) %}<a href="/people/{{ u.username }}">{{ u.username }}</a>{% else %}{{ u.username }}{% endif %}</b>
+          <b>{% if u.enabled %}<a href="/people/{{ u.username }}">{{ u.username }}</a>{% else %}{{ u.username }}{% endif %}</b>
           <small>{{ '管理员' if u.is_admin else '成员' }}{{ ' · 当前账户' if u.id == user.id else '' }}</small>
         </div>
         <dl class="roster-facts">
@@ -37,7 +37,7 @@
       <label class="field"><span>用户名</span><input name="username" pattern="[a-zA-Z0-9_.\-]{3,40}" required minlength="3" maxlength="40" autocomplete="off" spellcheck="false"><small>3–40 个英文字母、数字、下划线、点或连字符</small></label>
       <label class="field"><span>初始密码</span><input name="password" type="password" required minlength="12" maxlength="256" autocomplete="new-password"><small>至少 12 个字符，成员登录后可以自己修改</small></label>
       <div class="checks">
-        <label class="check"><input name="shared" type="checkbox"><span>公开给其他成员<small>成员之后可以在账户页自己改</small></span></label>
+        <label class="check"><input name="shared" type="checkbox"><span>向所有访客公开<small>不勾选时，仅登录成员可见；之后可以在账户页修改</small></span></label>
         <label class="check"><input name="is_admin" type="checkbox"><span>管理员<small>可以新建、停用账户</small></span></label>
       </div>
       <div class="row-actions"><button class="btn is-primary">新建账户</button></div>

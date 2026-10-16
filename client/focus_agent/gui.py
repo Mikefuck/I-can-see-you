@@ -18,13 +18,15 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QAbstractButton, QAbstractItemView, QApplication, QFrame, QGridLayout,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox,
-    QScrollArea, QSizePolicy, QSpinBox, QSystemTrayIcon, QTableWidget,
+    QScrollArea, QSizePolicy, QSystemTrayIcon, QTableWidget,
     QTableWidgetItem, QToolTip, QVBoxLayout, QWidget,
 )
 
 from . import __version__
 from .config import save_config
+from .controls import NoWheelSpinBox as QSpinBox
 from .aliases import alias_for, process_key
+from .app_colors import PALETTE, default_color
 from .ambient import AmbientBackground
 from .motion import MotionButton as QPushButton, MotionCheckBox as QCheckBox, MotionComboBox as QComboBox, MotionValue, PageStack
 from .network import Uploader, check_connection
@@ -643,6 +645,8 @@ class MainWindow(QMainWindow):
             item = self.history.item(row, 4)
             if item is not None:
                 item.setForeground(QColor(self.history_color(item.data(Qt.ItemDataRole.UserRole))))
+        for row in range(self.aliases.rowCount()):
+            self.refresh_program_color(row)
         for widget in self.findChildren(QWidget):
             widget.update()
         self.update()
@@ -807,7 +811,7 @@ class MainWindow(QMainWindow):
         actions.addWidget(dashboard)
         actions.addStretch()
         grid.addLayout(actions, 0, 1)
-        self.connection_note = self._label("hint", "首次保存或更换连接会验证账户和设备上传；测试连接会更新设备心跳。")
+        self.connection_note = self._label("hint", "首次保存、更换连接或修改设备名称会验证设备；同一账户下每台电脑须使用不同名称。")
         grid.addWidget(self.connection_note, 1, 1)
         grid.setColumnStretch(1, 1)
         outer.addLayout(grid)
@@ -941,6 +945,8 @@ class MainWindow(QMainWindow):
         self.interval = QSpinBox()
         self.interval.setRange(10, 300)
         self.interval.setSuffix(" 秒")
+        self.app_change_upload = QCheckBox("前台应用变化时立即上传")
+        self.app_change_upload.setToolTip("切换前台应用、进入或离开空闲 / 锁屏状态时，在后台立即上传。定时上传仍然保留。")
         self.battery_interval = QSpinBox()
         self.battery_interval.setRange(30, 3600)
         self.battery_interval.setSuffix(" 秒")
@@ -949,6 +955,7 @@ class MainWindow(QMainWindow):
                                                  ("电池状态间隔", self.battery_interval)]):
             grid.addWidget(self._label("caption", caption), 0, index * 2, 1, 2)
             grid.addWidget(spin, 1, index * 2, 1, 2)
+        grid.addWidget(self.app_change_upload, 2, 0, 1, 6)
         self.startup = QCheckBox("登录 Windows 后自动启动")
         self.silent = QCheckBox("静默启动（直接进入系统托盘）")
         self.silent.setToolTip("启动时不弹出主窗口，只显示托盘图标。再次运行程序或单击托盘图标可打开主窗口。")
@@ -972,7 +979,7 @@ class MainWindow(QMainWindow):
             for box in boxes:
                 column.addWidget(box)
             column.addStretch()
-            grid.addLayout(column, 2, index * 3, 1, 3)
+            grid.addLayout(column, 3, index * 3, 1, 3)
         layout.addLayout(grid)
         layout.addWidget(self._label("hint", "每秒采样前台应用。锁屏、睡眠及空闲时暂停计时；电源事件会先保存本地状态，再限时尝试上传。"
                                              "关闭窗口后继续在托盘运行。"))
@@ -994,26 +1001,31 @@ class MainWindow(QMainWindow):
         return table
 
     def _aliases_section(self):
-        frame, layout, _ = self._section("应用名翻译", "App names")
-        layout.addWidget(self._label("hint", "按进程名匹配（不区分大小写，可省略 .exe），例如 chrome.exe → 浏览器；原始进程名仍会保留。"
-                                     "可从系统进程批量选择；保存后立即同步本机历史记录的显示名称，离线时自动重试。"))
-        self.aliases = self._ledger_table(2, ["进程名", "自定义显示名"])
+        frame, layout, _ = self._section("程序名称与颜色", "Apps & colours")
+        layout.addWidget(self._label("hint", "按进程名匹配（可省略 .exe），显示名可留空。默认自动分配稳定颜色，也可选择与网页协调的配色。"
+                                     "选「默认」恢复单个程序，或恢复全部默认色；保存后同步本设备的网页时间线、历史记录和排行，离线自动重试。"))
+        self.aliases = self._ledger_table(3, ["进程名", "自定义显示名", "进度条颜色"])
         self.aliases.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked |
                                      QAbstractItemView.EditTrigger.EditKeyPressed)
         self.aliases.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.aliases.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.aliases.setColumnWidth(2, 154)
         self.fit_aliases()
         layout.addWidget(self.aliases)
         actions = QHBoxLayout()
         actions.setSpacing(8)
         self.choose_processes = QPushButton("选择系统进程")
         self.choose_processes.clicked.connect(self.pick_processes)
-        add_alias = QPushButton("添加翻译")
+        add_alias = QPushButton("添加程序")
         add_alias.clicked.connect(lambda: self.add_alias())
         remove_alias = QPushButton("删除选中")
         remove_alias.clicked.connect(self.remove_alias)
         actions.addWidget(self.choose_processes)
         actions.addWidget(add_alias)
         actions.addWidget(remove_alias)
+        self.reset_colors = QPushButton("恢复全部默认色")
+        self.reset_colors.clicked.connect(self.restore_program_colors)
+        actions.addWidget(self.reset_colors)
         actions.addStretch()
         layout.addLayout(actions)
         return frame
@@ -1062,17 +1074,15 @@ class MainWindow(QMainWindow):
         self.silent.setChecked(config.silent_start)
         self.idle.setValue(config.idle_seconds)
         self.interval.setValue(config.upload_seconds)
+        self.app_change_upload.setChecked(config.upload_on_app_change)
         self.battery.setChecked(config.battery_enabled)
         self.battery_interval.setValue(config.battery_seconds)
         self.battery_interval.setEnabled(config.battery_enabled)
         self.shutdown_upload.setChecked(config.upload_on_shutdown)
         self.suspend_upload.setChecked(config.upload_on_suspend)
         self.aliases.setRowCount(0)
-        for process, display_name in sorted(config.app_aliases.items()):
-            row = self.aliases.rowCount()
-            self.aliases.insertRow(row)
-            self.aliases.setItem(row, 0, QTableWidgetItem(process))
-            self.aliases.setItem(row, 1, QTableWidgetItem(display_name))
+        for process in sorted(config.app_aliases.keys() | config.app_colors.keys()):
+            self.insert_program_row(process, config.app_aliases.get(process, ""), config.app_colors.get(process, ""))
         self.fit_aliases()
         self.account.setText(config.username or "尚未关联账户")
 
@@ -1085,9 +1095,10 @@ class MainWindow(QMainWindow):
         self.fallback_protocol.activated.connect(self.mark_dirty)
         for spin in (self.port, self.fallback_port, self.idle, self.interval, self.battery_interval):
             spin.valueChanged.connect(self.mark_dirty)
-        for box in (self.startup, self.silent, self.battery, self.shutdown_upload, self.suspend_upload):
+        for box in (self.startup, self.silent, self.battery, self.shutdown_upload, self.suspend_upload,
+                    self.app_change_upload):
             box.clicked.connect(self.mark_dirty)
-        self.aliases.itemChanged.connect(self.mark_dirty)
+        self.aliases.itemChanged.connect(self.program_item_changed)
 
     def mark_dirty(self, *_):
         self.set_dirty(True)
@@ -1116,6 +1127,52 @@ class MainWindow(QMainWindow):
         """Grow the table with its rows (two to six visible) instead of leaving an empty block."""
         rows = min(max(self.aliases.rowCount(), 2), 6)
         self.aliases.setFixedHeight(self.aliases.horizontalHeader().sizeHint().height() + rows * 34 + 2)
+
+    def insert_program_row(self, process, display_name, color=""):
+        row = self.aliases.rowCount()
+        self.aliases.insertRow(row)
+        self.aliases.setItem(row, 0, QTableWidgetItem(process))
+        self.aliases.setItem(row, 1, QTableWidgetItem(display_name))
+        combo = QComboBox()
+        combo.setAccessibleName(f"{process or '新程序'}的进度条颜色")
+        combo.setToolTip("选择预设配色；选「默认」恢复自动分配的颜色。保存设置后同步到网页。")
+        combo.addItem("默认", "")
+        for color_id, label, *_ in PALETTE:
+            combo.addItem(label, color_id)
+        combo.setCurrentIndex(max(0, combo.findData(color)))
+        combo.currentIndexChanged.connect(self.mark_dirty)
+        self.aliases.setCellWidget(row, 2, combo)
+        self.refresh_program_color(row)
+        return row
+
+    def refresh_program_color(self, row):
+        combo = self.aliases.cellWidget(row, 2)
+        item = self.aliases.item(row, 0)
+        if combo is None or item is None:
+            return
+        process = item.text().strip()
+        default = default_color(process)
+        dark = self.resolved_theme() == "dark"
+        for index, (color_id, label, light, night) in enumerate(PALETTE, 1):
+            swatch = QPixmap(14, 14)
+            swatch.fill(QColor(night if dark else light))
+            icon = QIcon(swatch)
+            combo.setItemIcon(index, icon)
+            if color_id == default:
+                combo.setItemText(0, "默认 · " + label)
+                combo.setItemIcon(0, icon)
+        combo.setAccessibleName(f"{process or '新程序'}的进度条颜色")
+
+    def program_item_changed(self, item):
+        if item.column() == 0:
+            self.refresh_program_color(item.row())
+        self.mark_dirty()
+
+    def restore_program_colors(self):
+        for row in range(self.aliases.rowCount()):
+            combo = self.aliases.cellWidget(row, 2)
+            if combo is not None:
+                combo.setCurrentIndex(0)
 
     def alias_row(self, process):
         key = process_key(process)
@@ -1149,10 +1206,7 @@ class MainWindow(QMainWindow):
         for app in apps:
             row = self.alias_row(app.process_name)
             if row is None:
-                row = self.aliases.rowCount()
-                self.aliases.insertRow(row)
-                self.aliases.setItem(row, 0, QTableWidgetItem(app.process_name))
-                self.aliases.setItem(row, 1, QTableWidgetItem(app.app_name))
+                row = self.insert_program_row(app.process_name, app.app_name)
             if first is None:
                 first = row
         self.fit_aliases()
@@ -1172,10 +1226,7 @@ class MainWindow(QMainWindow):
             seen += [(event["process_name"], event["app_name"]) for event, _ in self.store.recent(self.config.destination)
                      if event.get("kind") == "app_usage"]
             process, display_name = next(((p, n) for p, n in seen if self.alias_row(p) is None), ("", ""))
-        row = self.aliases.rowCount()
-        self.aliases.insertRow(row)
-        self.aliases.setItem(row, 0, QTableWidgetItem(process))
-        self.aliases.setItem(row, 1, QTableWidgetItem(display_name))
+        row = self.insert_program_row(process, display_name)
         self.fit_aliases()
         self.edit_alias(row, 1 if process else 0)
 
@@ -1211,6 +1262,23 @@ class MainWindow(QMainWindow):
                 aliases[key] = display_name.text().strip()
         return aliases
 
+    def collect_colors(self):
+        colors, seen = {}, set()
+        for row in range(self.aliases.rowCount()):
+            process = self.aliases.item(row, 0)
+            key = process_key(process.text()) if process else ""
+            combo = self.aliases.cellWidget(row, 2)
+            color = combo.currentData() if combo is not None else ""
+            if color and not key:
+                raise ValueError("请先填写需要设置颜色的进程名")
+            if key:
+                if key in seen:
+                    raise ValueError(f"程序设置中的进程名重复：{process.text().strip()}")
+                seen.add(key)
+                if color:
+                    colors[key] = color
+        return colors
+
     def candidate(self):
         device_ids = dict(self.config.device_ids)
         if self.config.host and self.config.account_id:
@@ -1221,9 +1289,10 @@ class MainWindow(QMainWindow):
             protocol=self.protocol.currentText(), api_key=self.key.text().strip(), device_name=self.device_name.text(),
             startup=self.startup.isChecked(), silent_start=self.silent.isChecked(),
             idle_seconds=self.idle.value(), upload_seconds=self.interval.value(),
+            upload_on_app_change=self.app_change_upload.isChecked(),
             battery_enabled=self.battery.isChecked(), battery_seconds=self.battery_interval.value(),
             upload_on_shutdown=self.shutdown_upload.isChecked(), upload_on_suspend=self.suspend_upload.isChecked(),
-            app_aliases=self.collect_aliases(), device_ids=device_ids)
+            app_aliases=self.collect_aliases(), app_colors=self.collect_colors(), device_ids=device_ids)
         config.validate()
         return config
 
@@ -1236,7 +1305,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "设置有误", str(exc))
             return
         connection_changed = (candidate.base_urls, candidate.api_key) != (self.config.base_urls, self.config.api_key)
-        if saving and self.config.configured and not connection_changed:
+        name_changed = candidate.device_name != self.config.device_name
+        if saving and self.config.configured and not connection_changed and not name_changed:
             self.apply_config(candidate)
             return
         self.job_candidate, self.job_saving = candidate, saving
@@ -1299,8 +1369,8 @@ class MainWindow(QMainWindow):
         if hasattr(self.reader, "set_aliases"):
             self.reader.set_aliases(candidate.app_aliases)
         self.uploader.configure(candidate)
-        if candidate.app_aliases != previous.app_aliases:
-            self.upload_status.setText("正在同步应用名翻译…")
+        if candidate.app_aliases != previous.app_aliases or candidate.app_colors != previous.app_colors:
+            self.upload_status.setText("正在同步程序名称与配色…")
         self.account.setText(candidate.username)
         self.show_startup_state(candidate.startup)
         self.set_dirty(False)
@@ -1369,6 +1439,7 @@ class MainWindow(QMainWindow):
 
     def stop_collection(self):
         self.save_open_segment()
+        self.uploader.observe_foreground(None, time.time())
         self.running = False
         self.toggle.setText("开始采集")
         self.set_state("stopped", "采集已暂停")
@@ -1393,6 +1464,7 @@ class MainWindow(QMainWindow):
                 self.show_current(app, state)
                 finished = self.tracker.observe(app, time.time(), now)
                 self.store.add(self.config, finished)
+                self.uploader.observe_foreground(app, time.time())
                 if finished:
                     self.refresh_day()  # the closed segment moves from the live count into the stored total
                 if self.retry_sampling_at:
@@ -1413,6 +1485,7 @@ class MainWindow(QMainWindow):
             logging.exception("Sampling/storage failed")
             # A locked or full disk is often temporary: keep the agent alive and retry instead of stopping for good.
             self.tracker = SessionTracker()
+            self.uploader.observe_foreground(None, time.time())
             self.retry_sampling_at = now + 30
             self.set_state("error", "采集出错", "本地读取或存储失败，30 秒后自动重试")
             self.tray.setToolTip("专注记录 · 采集出错，稍后重试")
@@ -1547,6 +1620,7 @@ class MainWindow(QMainWindow):
         if not self.shutdown_saved:
             self.shutdown_saved = True
             self.save_open_segment()
+            self.uploader.observe_foreground(None, time.time(), trigger=False)
             if self.config.upload_on_shutdown:
                 self.record_status("shutdown")
                 self.uploader.trigger()
@@ -1569,6 +1643,7 @@ class MainWindow(QMainWindow):
             return  # the broadcast and the explicit subscription can both deliver it
         self.suspended, self.suspended_at = True, time.monotonic()
         self.save_open_segment()
+        self.uploader.observe_foreground(None, time.time(), trigger=False)
         if self.config.upload_on_suspend:
             self.record_status("suspend")
             self.uploader.flush(1.5)  # Windows allows about two seconds before suspending anyway

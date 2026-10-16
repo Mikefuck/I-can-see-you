@@ -23,6 +23,7 @@ def server_release(tmp_path, monkeypatch):
         path.write_bytes(b"not for distribution")
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs/THIRD-PARTY-NOTICES.md").write_text("notices", encoding="utf-8")
+    (server / "docs/server-live-apps-preview.jpg").write_bytes(b"preview fixture")
     release = server / "release"
     release.mkdir()
     image = release / "FocusLedger-server-linux-amd64.tar"
@@ -50,7 +51,8 @@ def test_server_can_be_packaged_without_client_and_excludes_local_secrets(server
         assert archive.testzip() is None
         names = set(archive.namelist())
         assert {"server/compose.panel.yaml", "server/app/main.py", "server/.env.example",
-                "server/FocusLedger-server-linux-amd64.tar", "server/IMAGE-SHA256SUMS.txt"} <= names
+                "server/FocusLedger-server-linux-amd64.tar", "server/IMAGE-SHA256SUMS.txt",
+                "server/docs/server-live-apps-preview.jpg"} <= names
         assert not any(name.endswith(".sqlite3") or "__pycache__" in name or name == "server/.env" for name in names)
     for line in (release / "SHA256SUMS.txt").read_text().splitlines():
         digest, name = line.split("  ")

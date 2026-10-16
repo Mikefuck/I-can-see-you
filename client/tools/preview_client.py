@@ -49,6 +49,9 @@ class FakeUploader:
     def trigger(self):
         pass
 
+    def observe_foreground(self, app, wall, *, trigger=True):
+        pass
+
     def flush(self, timeout=3.0):
         return True
 

@@ -1,3 +1,4 @@
+import gzip
 import json
 import logging
 import threading
@@ -5,9 +6,11 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import replace
+from datetime import datetime, timezone
 from queue import Queue
 
 from . import __version__
+from .identity import machine_identity
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -24,6 +27,28 @@ class RejectedEvents(RuntimeError):
 
 class AliasSyncUnavailable(RuntimeError):
     pass
+
+
+class ColorSyncUnavailable(RuntimeError):
+    pass
+
+
+class DeviceNameConflict(RuntimeError):
+    pass
+
+
+class UploadCompressionUnavailable(RuntimeError):
+    pass
+
+
+def encode_json(body, *, compress=False):
+    """Keep event values intact; compress only when the request actually gets smaller."""
+    data = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if compress and len(data) >= 256:
+        compressed = gzip.compress(data, compresslevel=6, mtime=0)
+        if len(compressed) < len(data):
+            return compressed, True
+    return data, False
 
 
 def rejected_event_indexes(error):
@@ -44,13 +69,17 @@ def rejected_event_indexes(error):
     return indexes
 
 
-def request_json(config, path, body=None, method=None):
-    data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
+def request_json(config, path, body=None, method=None, *, compress=False):
+    data, compressed = encode_json(body, compress=compress) if body is not None else (None, False)
     urls = config.connection_urls
     for index, base_url in enumerate(urls):
         try:
             result = _request_json(config, base_url, path, data, body, method,
-                                   timeout=3 if len(urls) > 1 else 10)
+                                   timeout=3 if len(urls) > 1 else 10, compressed=compressed)
+        except UploadCompressionUnavailable:
+            # This route is reachable; the plain retry should not revisit a failed route.
+            config.preferred_endpoint = base_url
+            raise
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             if isinstance(exc, urllib.error.HTTPError):
                 exc.close()
@@ -65,10 +94,17 @@ def request_json(config, path, body=None, method=None):
         return result
 
 
-def _request_json(config, base_url, path, data, body, method, timeout):
+def _request_json(config, base_url, path, data, body, method, timeout, *, compressed=False):
+    headers = {"Authorization": "Bearer " + config.api_key, "Content-Type": "application/json",
+               "User-Agent": "FocusLedger/" + __version__}
+    if compressed:
+        headers["Content-Encoding"] = "gzip"
+    if path in {"/api/v1/usage/batches", "/api/v1/agent/app-aliases", "/api/v1/agent/app-colors"}:
+        machine_id = machine_identity()
+        if machine_id:
+            headers["X-FocusLedger-Machine-ID"] = machine_id
     request = urllib.request.Request(base_url + path, data=data,
-        headers={"Authorization": "Bearer " + config.api_key, "Content-Type": "application/json",
-                 "User-Agent": "FocusLedger/" + __version__}, method=method)
+                                     headers=headers, method=method)
     try:
         with urllib.request.build_opener(NoRedirect).open(request, timeout=timeout) as response:
             raw = response.read(1024 * 1024 + 1)
@@ -78,8 +114,22 @@ def _request_json(config, base_url, path, data, body, method, timeout):
     except urllib.error.HTTPError as exc:
         if exc.code >= 500:
             raise
+        if compressed and exc.code in (400, 415):
+            exc.close()
+            raise UploadCompressionUnavailable("服务器或代理未接受压缩上传") from None
         if path == "/api/v1/agent/app-aliases" and exc.code in (404, 405):
             raise AliasSyncUnavailable("服务端不支持历史名称同步，请升级服务端") from None
+        if path == "/api/v1/agent/app-colors" and exc.code in (404, 405):
+            raise ColorSyncUnavailable("服务端不支持程序配色，请升级服务端") from None
+        if exc.code == 409:
+            try:
+                detail = json.loads(exc.read(64 * 1024)).get("detail")
+            except (ValueError, AttributeError):
+                detail = None
+            finally:
+                exc.close()
+            if isinstance(detail, dict) and detail.get("code") == "device_name_conflict":
+                raise DeviceNameConflict("设备名称已被占用，请在设置中修改设备名称后重试") from None
         if exc.code == 422 and body is not None:
             indexes = rejected_event_indexes(exc)
             if indexes:
@@ -114,8 +164,14 @@ class Uploader:
         self.lock = threading.Lock()
         self.config = replace(config)
         self.alias_state = None
+        self.color_state = None
+        self.compression_state = None
+        self.foreground = None
+        self.foreground_supported = None
         self.messages = Queue()
         self.wake = threading.Event()
+        self.force_upload = True
+        self.retry_at = 0.0
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, name="focus-upload", daemon=True)
 
@@ -124,14 +180,41 @@ class Uploader:
 
     def configure(self, config):
         with self.lock:
+            if not config.upload_on_app_change or (self.config.destination, self.config.device_id) != (config.destination, config.device_id):
+                self.foreground = None
+            self.foreground_supported = None
             preferred = (self.config.active_url if self.config.base_urls == config.base_urls and
                          self.config.api_key == config.api_key else config.active_url)
             self.config = replace(config, preferred_endpoint=preferred)
-            self.alias_state = None
-        self.wake.set()
+            # Confirmed mappings remain valid when unrelated settings change. Retry warnings
+            # on a settings save so an upgraded server can be detected without a restart.
+            if self.alias_state is not None and self.alias_state[1]:
+                self.alias_state = None
+            if self.color_state is not None and self.color_state[1]:
+                self.color_state = None
+            if self.compression_state is not None and not self.compression_state[1]:
+                self.compression_state = None
+        self.trigger()
 
     def trigger(self):
+        with self.lock:
+            self.force_upload = True
         self.wake.set()
+
+    def observe_foreground(self, app, wall, *, trigger=True):
+        """Keep only the latest observation; usage records remain in the durable queue."""
+        with self.lock:
+            if not self.config.upload_on_app_change:
+                return
+            current = {"app_name": app.app_name, "process_name": app.process_name} if app else None
+            previous = self.foreground
+            changed = previous is None or previous["app"] != current
+            observed = datetime.fromtimestamp(wall, timezone.utc).isoformat()
+            since = observed if changed or observed < previous["observed_at"] else previous["since"]
+            self.foreground = {"observed_at": observed, "since": since, "app": current}
+        if changed and trigger:
+            # Automatic app changes keep the newest snapshot, but respect failure backoff.
+            self.wake.set()
 
     def flush(self, timeout=3.0):
         """Request an immediate upload and wait briefly for the current queue.
@@ -158,9 +241,34 @@ class Uploader:
         self.stop_event.set()
         self.wake.set()
 
+    def _request(self, config, path, body=None, method=None):
+        # Capability discovery rides on the first ordinary upload, avoiding another request.
+        signature = (config.base_urls, config.api_key)
+        with self.lock:
+            state = self.compression_state
+        compress = state is not None and state[0] == signature and state[1]
+        try:
+            if compress:
+                result = request_json(config, path, body, method, compress=True)
+            else:
+                result = request_json(config, path, body, method)
+        except UploadCompressionUnavailable:
+            # A reverse proxy or an older fallback server may reject Content-Encoding.
+            # Retry the same IDs once as JSON, and stop trying compression for this connection.
+            with self.lock:
+                self.compression_state = (signature, False)
+            result = request_json(config, path, body, method)
+        if path == "/api/v1/usage/batches" and isinstance(result, dict):
+            encodings = result.get("upload_encodings")
+            with self.lock:
+                if self.compression_state is None or self.compression_state[0] != signature:
+                    self.compression_state = (signature, isinstance(encodings, list) and "gzip" in encodings)
+        return result
+
     def sync_aliases(self, config):
         """Retry from the saved config after outages/restarts; cache only confirmed snapshots."""
-        signature = (config.base_urls, config.api_key, config.device_id, tuple(sorted(config.app_aliases.items())))
+        signature = (config.base_urls, config.api_key, config.device_id, config.device_name,
+                     tuple(sorted(config.app_aliases.items())))
         with self.lock:
             state = self.alias_state
         if state is not None and state[0] == signature:
@@ -168,10 +276,12 @@ class Uploader:
         body = {"device": {"id": config.device_id, "name": config.device_name,
                 "platform": "windows", "agent_version": __version__}, "app_aliases": config.app_aliases}
         try:
-            result = request_json(config, "/api/v1/agent/app-aliases", body, method="PUT")
+            result = self._request(config, "/api/v1/agent/app-aliases", body, method="PUT")
         except AliasSyncUnavailable as exc:
             # Older servers still receive usage records. Recheck on the next settings save/start.
             warning = str(exc)
+        except DeviceNameConflict:
+            raise
         except RuntimeError as exc:
             raise RuntimeError("记录已上传，名称同步失败：" + str(exc)) from exc
         else:
@@ -183,6 +293,33 @@ class Uploader:
             self.alias_state = (signature, warning)
         return warning
 
+    def sync_colors(self, config):
+        """An empty mapping clears overrides too; failures never acknowledge this snapshot."""
+        signature = (config.base_urls, config.api_key, config.device_id, config.device_name,
+                     tuple(sorted(config.app_colors.items())))
+        with self.lock:
+            state = self.color_state
+        if state is not None and state[0] == signature:
+            return state[1]
+        body = {"device": {"id": config.device_id, "name": config.device_name,
+                "platform": "windows", "agent_version": __version__}, "app_colors": config.app_colors}
+        try:
+            result = self._request(config, "/api/v1/agent/app-colors", body, method="PUT")
+        except ColorSyncUnavailable as exc:
+            warning = str(exc) if config.app_colors else ""
+        except DeviceNameConflict:
+            raise
+        except RuntimeError as exc:
+            raise RuntimeError("记录已上传，配色同步失败：" + str(exc)) from exc
+        else:
+            if (not isinstance(result, dict) or result.get("ok") is not True or
+                    result.get("device_id") != config.device_id or result.get("app_colors") != config.app_colors):
+                raise RuntimeError("服务器未确认程序配色，稍后重试")
+            warning = ""
+        with self.lock:
+            self.color_state = (signature, warning)
+        return warning
+
     def _run(self):
         failures = 0
         last_cleanup = 0
@@ -190,8 +327,14 @@ class Uploader:
             # Clear before snapshot/upload so a configuration change during the request is not lost.
             self.wake.clear()
             with self.lock:
+                retry_wait = max(0, self.retry_at - time.monotonic()) if not self.force_upload else 0
+                self.force_upload = False
                 # configure() replaces the object; keep this snapshot so successful routes survive retries.
                 config = self.config
+                foreground, supported = self.foreground, self.foreground_supported
+            if retry_wait:
+                self.wake.wait(retry_wait)
+                continue
             wait = config.upload_seconds
             if config.configured:
                 try:
@@ -202,19 +345,38 @@ class Uploader:
                     if payload is None:
                         payload = {"schema_version": 1, "device": {"id": config.device_id, "name": config.device_name,
                                    "platform": "windows", "agent_version": __version__}, "events": []}
-                    result = request_json(config, "/api/v1/usage/batches", payload)
+                    elif payload["device"]["id"] == config.device_id:
+                        # Renaming after a conflict must also repair pending records made under
+                        # the old name. Event IDs and payloads stay unchanged for deduplication.
+                        payload["device"] = {**payload["device"], "name": config.device_name}
+                    foreground_warning = ""
+                    if config.upload_on_app_change and foreground is not None and payload["device"]["id"] == config.device_id:
+                        if supported is None:
+                            capabilities = request_json(config, "/api/v1/agent/check")
+                            supported = "foreground" in capabilities.get("features", [])
+                            with self.lock:
+                                if self.config is config:
+                                    self.foreground_supported = supported
+                        if supported:
+                            payload["foreground"] = foreground
+                        else:
+                            foreground_warning = "服务端不支持实时前台状态，请升级服务端"
+                    result = self._request(config, "/api/v1/usage/batches", payload)
                     sent_ids = {event["id"] for event in payload["events"]}
                     acknowledged = result.get("acknowledged_ids")
                     if not isinstance(acknowledged, list) or set(acknowledged) != sent_ids:
                         raise RuntimeError("服务器未完整确认记录，保留缓存等待重试")
                     self.store.acknowledge(config.destination, acknowledged)
-                    warning = self.sync_aliases(config)
+                    warning = " · ".join(filter(None, (foreground_warning, self.sync_aliases(config), self.sync_colors(config))))
                     failures = 0
+                    with self.lock:
+                        self.retry_at = 0.0
                     if warning:
                         self.messages.put((False, "记录已上传 · " + warning))
                     else:
                         self.messages.put((True, "上传成功 · " + time.strftime("%H:%M:%S") +
                                            (" · 名称已同步" if config.app_aliases else "") +
+                                           (" · 配色已同步" if config.app_colors else "") +
                                            (" · " + config.active_url if len(config.base_urls) > 1 else "")))
                     if self.store.counts(config.destination)[0]:
                         wait = 1
@@ -224,8 +386,15 @@ class Uploader:
                     logging.warning("Server rejected invalid events, set aside locally: %s", ids)
                     self.messages.put((False, f"服务器拒收 {len(ids)} 条无效记录，已跳过并保留在本地"))
                     wait = 1
+                except DeviceNameConflict as exc:
+                    wait = 300
+                    with self.lock:
+                        self.retry_at = time.monotonic() + wait
+                    self.messages.put((False, str(exc)))
                 except Exception as exc:
                     failures += 1
                     wait = min(300, config.upload_seconds * 2 ** min(failures - 1, 5))
+                    with self.lock:
+                        self.retry_at = time.monotonic() + wait
                     self.messages.put((False, f"{exc} · {wait}秒后重试"))
             self.wake.wait(wait)

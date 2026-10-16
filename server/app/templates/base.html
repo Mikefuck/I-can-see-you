@@ -9,6 +9,7 @@
   <link rel="icon" href="{{ url_for('static', path='mark.svg') }}" type="image/svg+xml">
   <script src="{{ url_for('static', path='theme.js') }}"></script>
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+  <script src="{{ url_for('static', path='realtime.js') }}" defer></script>
   <script src="{{ url_for('static', path='app.js') }}" defer></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
@@ -19,14 +20,14 @@
       <svg class="brand-mark" viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16"/><path d="M3 4h10v2H3zM3 7h6v2H3zM3 10h8v2H3z"/></svg>
       <span class="brand-word">专注记录<small>Focus Ledger</small></span>
     </a>
-    {% if user %}
-    <nav class="tabs" aria-label="页面">
-      <a href="/"{% if nav == 'board' %} aria-current="page"{% endif %}>总览<small>Board</small></a>
+    <nav class="tabs{{ ' is-guest' if not user else '' }}" aria-label="页面">
+      <a href="/"{% if nav == 'board' %} aria-current="page"{% endif %}>设备看板<small>Board</small></a>
+      {% if user %}
       <a href="/people/{{ user.username }}"{% if nav == 'mine' %} aria-current="page"{% endif %}>我的记录<small>Mine</small></a>
       <a href="/settings"{% if nav == 'account' %} aria-current="page"{% endif %}>账户<small>Account</small></a>
       {% if user.is_admin %}<a href="/admin/users"{% if nav == 'members' %} aria-current="page"{% endif %}>成员<small>Members</small></a>{% endif %}
+      {% endif %}
     </nav>
-    {% endif %}
     <div class="mast-actions">
       <details class="theme-picker" data-theme-picker hidden>
         <summary title="切换主题">
@@ -45,13 +46,17 @@
         <span class="who-name">{{ user.username }}</span>
         <button class="link-button">退出</button>
       </form>
+      {% elif request.url.path != '/login' %}
+      <a class="btn is-small" href="/login">成员登录</a>
       {% endif %}
     </div>
   </div>
   <div class="mast-rule" aria-hidden="true"><i class="refresh-line" data-refresh-line></i></div>
 </header>
 <main class="page">
+  {% block error_notice %}
   {% if error %}<div class="notice is-error" role="alert"><b>未完成</b><span>{{ error }}</span></div>{% endif %}
+  {% endblock %}
   {% block content %}{% endblock %}
 </main>
 <footer class="foot">

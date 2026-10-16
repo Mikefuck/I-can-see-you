@@ -5,14 +5,16 @@ import time
 import threading
 from ctypes import wintypes
 from queue import Queue
+from types import SimpleNamespace
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint, QRect
-from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QPalette
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt
+from PySide6.QtWidgets import QApplication, QAbstractSpinBox, QComboBox, QScrollArea, QStyle, QStyleOptionSpinBox
+from PySide6.QtGui import QPalette, QWheelEvent
+from PySide6.QtTest import QTest
 from focus_agent import gui
 from focus_agent import management_ui
 from focus_agent import motion
@@ -50,6 +52,9 @@ class Upload:
 
     def trigger(self):
         self.calls.append("trigger")
+
+    def observe_foreground(self, app, wall, *, trigger=True):
+        pass
 
     def flush(self, timeout=3.0):
         self.calls.append(("flush", timeout))
@@ -94,11 +99,169 @@ def make_window(tmp_path, monkeypatch):
     yield app, build
     for window in windows:
         window.quit_app()
+        if window.job_thread is None and window.management_panel.thread is None:
+            window.deleteLater()
+    app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def test_program_colors_save_without_renaming_and_restore_defaults(make_window):
+    app, build = make_window
+    window = build(app_aliases={"code": "编辑器"}, app_colors={"chrome.exe": "teal"})
+    chrome = window.alias_row("chrome.exe")
+    code = window.alias_row("Code.exe")
+    assert window.aliases.item(chrome, 1).text() == ""
+    assert window.aliases.cellWidget(chrome, 2).currentData() == "teal"
+    picker = window.aliases.cellWidget(code, 2)
+    picker.setCurrentIndex(picker.findData("rose"))
+    assert window.dirty
+    window.connection_job(saving=True)
+    saved = load_config(window.config_path, decrypt)
+    assert saved.app_aliases == {"code": "编辑器"}
+    assert saved.app_colors == {"chrome.exe": "teal", "code": "rose"}
+    assert not window.dirty
+    # One row can return to default without changing another; the button clears all overrides.
+    picker.setCurrentIndex(0)
+    assert window.collect_colors() == {"chrome.exe": "teal"}
+    QTest.mouseClick(window.reset_colors, Qt.MouseButton.LeftButton)
+    assert window.dirty and window.collect_colors() == {}
+    window.connection_job(saving=True)
+    assert load_config(window.config_path, decrypt).app_colors == {}
+    assert window.config.app_aliases == {"code": "编辑器"}
+
+
+def test_program_color_preview_follows_process_theme_and_ignores_wheel(make_window):
+    from focus_agent.app_colors import default_color
+    app, build = make_window
+    window = build(theme="light", app_colors={"chrome.exe": "teal"})
+    combo = window.aliases.cellWidget(0, 2)
+    light = combo.itemIcon(combo.findData("teal")).pixmap(14, 14).toImage().pixelColor(7, 7).name()
+    window.select_theme("dark")
+    dark = combo.itemIcon(combo.findData("teal")).pixmap(14, 14).toImage().pixelColor(7, 7).name()
+    assert light == "#487f7a" and dark == "#83b5a9"
+    combo.setCurrentIndex(0)
+    window.aliases.item(0, 0).setText("WindowsTerminal.exe")
+    from focus_agent.app_colors import PALETTE
+    assert combo.itemText(0) == "默认 · " + next(c[1] for c in PALETTE if c[0] == default_color("WindowsTerminal.exe"))
+    for target in (combo,):
+        send_wheel(target, -120)
+        assert combo.currentIndex() == 0
 
 
 def statuses(window):
     return [event for event, _ in reversed(window.store.recent(window.config.destination))
             if event["kind"] == "device_status"]
+
+
+def send_wheel(target, delta):
+    point = target.rect().center()
+    QApplication.sendEvent(target, QWheelEvent(
+        QPointF(point), QPointF(target.mapToGlobal(point)), QPoint(), QPoint(0, delta),
+        Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase, False))
+
+
+@pytest.mark.parametrize("focused", [False, True])
+@pytest.mark.parametrize("delta", [-120, 120])
+def test_wheel_never_changes_settings_even_with_focus(make_window, focused, delta):
+    app, build = make_window
+    window = build()
+    window.show()
+    window.timer.stop()
+    window.management_panel.admin.setEnabled(True)
+    for page in (1, 2):
+        window.pages.setCurrentIndex(page)
+        window.pages.finish_transition()
+        app.processEvents()
+        spins = window.pages.currentWidget().findChildren(QAbstractSpinBox)
+        combos = window.pages.currentWidget().findChildren(QComboBox)
+        for control in spins + combos:
+            if isinstance(control, QAbstractSpinBox):
+                control.setValue((control.minimum() + control.maximum()) // 2)
+                before = control.value()
+            else:
+                control.setCurrentIndex(0 if delta < 0 else 1)
+                before = control.currentIndex()
+            window.dirty = False
+            if focused:
+                control.setFocus()
+            else:
+                window.background.setFocus()
+            app.processEvents()
+            assert control.hasFocus() == focused
+            send_wheel(control, delta)
+            if isinstance(control, QAbstractSpinBox):
+                assert control.value() == before
+                send_wheel(control.lineEdit(), delta)
+                assert control.value() == before
+            else:
+                assert control.currentIndex() == before
+            assert not window.dirty
+
+
+@pytest.mark.parametrize("field", ["interval", "protocol", "retention"])
+def test_wheel_over_setting_scrolls_parent_page(make_window, field):
+    app, build = make_window
+    window = build()
+    window.resize(1100, 680)
+    window.show()
+    window.timer.stop()
+    window.management_panel.admin.setEnabled(True)
+    window.pages.setCurrentIndex(2 if field == "retention" else 1)
+    window.pages.finish_transition()
+    app.processEvents()
+    control = getattr(window.management_panel if field == "retention" else window, field)
+    area = control.parentWidget()
+    while not isinstance(area, QScrollArea):
+        area = area.parentWidget()
+    bar = area.verticalScrollBar()
+    assert bar.maximum() > 0
+    area.ensureWidgetVisible(control)
+    control.setFocus()
+    app.processEvents()
+    before = bar.value()
+    delta = 120 if before else -120
+    QTest.wheelEvent(window.windowHandle(), control.mapTo(window, control.rect().center()), QPoint(0, delta))
+    app.processEvents()
+    if delta > 0:
+        assert bar.value() < before
+    else:
+        assert bar.value() > before
+
+
+def test_settings_keep_typing_arrow_buttons_and_dropdown_selection(make_window):
+    app, build = make_window
+    window = build()
+    window.show()
+    window.timer.stop()
+    window.pages.setCurrentIndex(1)
+    window.pages.finish_transition()
+    app.processEvents()
+    spin = window.interval
+    spin.setFocus()
+    QTest.keyClick(spin, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    QTest.keyClicks(spin, "60")
+    QTest.keyClick(spin, Qt.Key.Key_Return)
+    assert spin.value() == 60
+    QTest.keyClick(spin, Qt.Key.Key_Up)
+    assert spin.value() == 61
+    option = QStyleOptionSpinBox()
+    spin.initStyleOption(option)
+    arrow = spin.style().subControlRect(
+        QStyle.ComplexControl.CC_SpinBox, option, QStyle.SubControl.SC_SpinBoxUp, spin)
+    QTest.mouseClick(spin, Qt.MouseButton.LeftButton, pos=arrow.center())
+    assert spin.value() == 62
+    combo = window.protocol
+    combo.setCurrentIndex(0)
+    combo.setFocus()
+    app.processEvents()
+    QTest.mouseClick(combo, Qt.MouseButton.LeftButton)
+    app.processEvents()
+    view = combo.view()
+    assert view.isVisible()
+    QTest.mouseMove(view.viewport(), view.visualRect(combo.model().index(1, 0)).center())
+    QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton,
+                     pos=view.visualRect(combo.model().index(1, 0)).center())
+    assert combo.currentText() == "https"
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
@@ -172,6 +335,30 @@ def wait_job(app, window):
         app.processEvents()
         time.sleep(0.01)
     assert window.job_thread is None
+
+
+def test_device_name_save_checks_conflict_before_changing_saved_config(make_window, monkeypatch):
+    app, build = make_window
+    window = build(device_name="原名称")
+    calls = []
+    def verify(candidate):
+        calls.append(candidate.device_name)
+        raise RuntimeError("设备名称已被占用，请在设置中修改设备名称后重试")
+    monkeypatch.setattr(gui, "check_connection", verify)
+    window.device_name.setText("已占用名称")
+    window.mark_dirty()
+    window.connection_job(True)
+    wait_job(app, window)
+    assert calls == ["已占用名称"]
+    assert window.config.device_name == "原名称"
+    assert "设备名称已被占用" in window.connection_note.text()
+    assert window.dirty
+    monkeypatch.setattr(gui, "check_connection", lambda candidate: {
+        "account_id": 1, "username": "alice", "device_id": candidate.device_id, "retention_days": 365})
+    window.device_name.setText("新名称")
+    window.connection_job(True)
+    wait_job(app, window)
+    assert window.config.device_name == "新名称" and not window.dirty
 
 
 def test_backup_settings_save_through_primary_outage_without_new_device(make_window, monkeypatch, tmp_path):
@@ -593,6 +780,53 @@ def test_settings_edits_are_flagged_until_saved(make_window):
     assert window.dirty and window.settings_tab.flagged and not window.unsaved.isHidden()
     window.connection_job(True)
     assert not window.dirty and not window.settings_tab.flagged and window.unsaved.isHidden()
+
+
+def test_app_change_upload_switch_is_saved_and_restored(make_window, tmp_path):
+    _, build = make_window
+    window = build()
+    assert not window.app_change_upload.isChecked()
+    window.app_change_upload.click()
+    assert window.dirty
+    window.connection_job(True)
+    assert window.config.upload_on_app_change and not window.dirty
+    assert load_config(tmp_path / "config.json", decrypt).upload_on_app_change
+    window.config.upload_on_app_change = False
+    window._populate()
+    assert not window.app_change_upload.isChecked()
+
+
+def test_app_switch_uploads_new_state_after_saving_previous_usage(make_window, monkeypatch):
+    from focus_agent.network import Uploader
+
+    _, build = make_window
+    window = build(upload_on_app_change=True)
+    fake, window.tracker = window.uploader, SessionTracker()
+    uploader = Uploader(window.store, window.config)
+    window.uploader = uploader
+    wall, monotonic = time.time(), time.monotonic()
+    other = Application("Editor", "editor.exe")
+    try:
+        for offset, (current, changed) in enumerate([(APP, True), (APP, False), (other, True),
+                                                    (other, False), (None, True), (None, False), (other, True)]):
+            monkeypatch.setattr(gui, "time", SimpleNamespace(time=lambda: wall + offset,
+                                                            monotonic=lambda: monotonic + offset))
+            monkeypatch.setattr(window.reader, "sample", lambda idle: (current, "test state"))
+            uploader.wake.clear()
+            window.tick()
+            assert uploader.wake.is_set() is changed
+            assert uploader.foreground["app"] == ({"app_name": current.app_name, "process_name": current.process_name}
+                                                   if current else None)
+            if offset == 2:
+                usage = [event for event, _ in window.store.recent(window.config.destination)
+                         if event["kind"] == "app_usage"]
+                assert len(usage) == 1 and usage[0]["process_name"] == APP.process_name
+                assert usage[0]["duration_seconds"] == 2
+        uploader.wake.clear()
+        window.stop_collection()
+        assert uploader.wake.is_set() and uploader.foreground["app"] is None
+    finally:
+        window.uploader = fake
 
 
 def test_system_theme_changes_live_and_manual_choice_takes_priority(make_window, tmp_path):

@@ -1,16 +1,18 @@
 {% extends 'base.html' %}
+{% from '_live.html' import live_apps %}
 {% block title %}{{ person.username }} · 专注记录{% endblock %}
 {% block content %}
-{% set own = person.id == user.id %}
+{% set own = user and person.id == user.id %}
 <section class="person-head" data-person="{{ person.username }}">
-  <p class="kicker">{{ '我的记录' if own else '成员记录' }}<small>{{ 'Mine' if own else 'Member' }}</small></p>
+  <p class="kicker">{{ '我的记录' if own else '公开记录' if person.shared else '成员记录' }}<small>{{ 'Mine' if own else 'Public' if person.shared else 'Member' }}</small></p>
   <h1 class="person-name">{{ person.username }}</h1>
   <p class="person-meta">
-    {% if own %}{% if person.shared %}<span class="pill is-on">已公开给其他成员</span>{% else %}<span class="pill">只有你自己能看到</span> <a href="/settings#sharing">公开设置</a>{% endif %}
-    {% else %}<span class="pill is-on">对方已公开</span>{% endif %}
+    <span class="pill{{ ' is-on' if person.shared else '' }}">{{ '所有访客可见' if person.shared else '仅登录成员可见' }}</span>
+    {% if own %}<a href="/settings#sharing">公开设置</a>{% endif %}
     <span data-person-meta></span>
   </p>
 </section>
+{{ live_apps(username=person.username) }}
 <nav class="controls" aria-label="时间范围与设备" data-controls>
   <div class="segmented" data-spans>
     <a href="?span=day" data-span="day">日<small>Day</small></a><a href="?span=week" data-span="week">周<small>Week</small></a><a href="?span=month" data-span="month">月<small>30 days</small></a><a href="?span=year" data-span="year">年<small>Year</small></a>

@@ -15,6 +15,7 @@ def test_alias_updates_history_ranking_and_live_name_without_mutating_events(aut
     body["events"][0]["process_name"] = "Example.EXE"
     assert send(client, key, body).json()["inserted"] == 1
     other = batch()
+    other["device"]["name"] = "Other PC"
     assert send(client, key, other).json()["inserted"] == 1
     result = sync(client, key, body["device"], {r"C:\Apps\EXAMPLE.exe": "历史应用新名称"})
     assert result.status_code == 200 and result.json()["app_aliases"] == {"example.exe": "历史应用新名称"}

@@ -6,6 +6,7 @@ viewer's time zone.
 """
 from collections import defaultdict
 from .aliases import device_aliases, display_name
+from .app_colors import color_for, device_colors
 
 # The client uploads every 10–300 s (default 30) and sends an empty heartbeat when idle.
 ONLINE_SECONDS = 330
@@ -22,30 +23,39 @@ MAX_SPAN = 367 * 86400
 
 class Apps:
     """Interns (app name, process) pairs so payloads repeat small indexes instead of names."""
-    def __init__(self):
+    def __init__(self, db=None):
+        self.db, self.device_colors = db, {}
         self.index, self.items = {}, []
+        self.colors = []
 
-    def __call__(self, name, process):
-        key = (name, process)
+    def __call__(self, name, process, device_id=""):
+        if device_id not in self.device_colors:
+            self.device_colors[device_id] = device_colors(self.db, device_id) if self.db is not None else {}
+        color = color_for(self.device_colors[device_id], process)
+        key = (name, process, color)
         if key not in self.index:
             self.index[key] = len(self.items)
             self.items.append([name, process])
+            self.colors.append(color)
         return self.index[key]
 
 
 def visible_people(db, viewer):
-    """The viewer first, then every enabled account that chose to share."""
+    """Guests see public accounts; signed-in members see every enabled account."""
+    viewer_id = viewer["id"] if viewer else None
     return db.execute(
-        "SELECT id,username,shared FROM users WHERE enabled=1 AND (id=? OR shared=1) "
-        "ORDER BY id<>?, username COLLATE NOCASE", (viewer["id"], viewer["id"])).fetchall()
+        "SELECT id,username,shared FROM users WHERE enabled=1 AND (shared=1 OR ?=1) "
+        "ORDER BY id IS NOT ?, username COLLATE NOCASE", (viewer is not None, viewer_id)).fetchall()
 
 
 def find_person(db, viewer, username):
-    return db.execute("SELECT id,username,shared FROM users WHERE username=? AND enabled=1 AND (id=? OR shared=1)",
-                      (username, viewer["id"])).fetchone()
+    return db.execute("SELECT id,username,shared FROM users WHERE username=? AND enabled=1 AND (shared=1 OR ?=1)",
+                      (username, viewer is not None)).fetchone()
 
 
 def devices_of(db, user_ids, cutoff):
+    if not user_ids:
+        return []
     marks = ",".join("?" * len(user_ids))
     return db.execute(f"SELECT * FROM devices WHERE user_id IN ({marks}) AND last_seen>? ORDER BY first_seen",
                       [*user_ids, cutoff]).fetchall()
@@ -68,6 +78,15 @@ def device_summary(db, device, now):
         else:
             break
     recent.close()
+    foreground = db.execute("SELECT * FROM device_foreground WHERE device_id=?", (device["id"],)).fetchone()
+    if foreground and (now - foreground["observed_at"] > ONLINE_SECONDS or
+                       foreground["observed_at"] < device["last_seen"] - ACTIVE_SECONDS):
+        foreground = None
+    if foreground and foreground["app_name"] is not None:
+        last = {"app": display_name(aliases, foreground["process_name"], foreground["app_name"]),
+                "process": foreground["process_name"], "since": foreground["since"], "until": foreground["observed_at"]}
+    if last:
+        last["color"] = color_for(device_colors(db, device["id"]), last["process"])
     lifecycle = db.execute("SELECT occurred_at,reason FROM status_events WHERE device_id=? AND reason<>'periodic' "
                            "ORDER BY occurred_at DESC LIMIT 1", (device["id"],)).fetchone()
     battery = db.execute("SELECT occurred_at,battery_percent,charging,ac_online,battery_life_seconds FROM status_events "
@@ -76,10 +95,13 @@ def device_summary(db, device, now):
     last_seen, last_use = device["last_seen"], last["until"] if last else None
     # A shutdown or sleep only counts while nothing was used or uploaded after it.
     if lifecycle and lifecycle["reason"] in ("shutdown", "suspend") and (last_use or 0) <= lifecycle["occurred_at"] + 5 \
-            and last_seen <= lifecycle["occurred_at"] + 120:
+            and last_seen <= lifecycle["occurred_at"] + 120 \
+            and (foreground is None or foreground["observed_at"] <= lifecycle["occurred_at"]):
         state, since = ("off" if lifecycle["reason"] == "shutdown" else "asleep"), lifecycle["occurred_at"]
     elif now - last_seen > ONLINE_SECONDS:
         state, since = "offline", last_seen
+    elif foreground:
+        state, since = ("active" if foreground["app_name"] is not None else "idle"), foreground["since"]
     elif last_use and last_use >= last_seen - ACTIVE_SECONDS:
         state, since = "active", last["since"]
     else:
@@ -93,6 +115,19 @@ def device_summary(db, device, now):
             "charging": None if battery["charging"] is None else bool(battery["charging"]),
             "ac": None if battery["ac_online"] is None else bool(battery["ac_online"]),
             "life": battery["battery_life_seconds"]},
+    }
+
+
+def live_view(db, viewer, now, cutoff, people=None):
+    """Current device summaries only; frequent refreshes need no timeline or ranking scan."""
+    people = visible_people(db, viewer) if people is None else people
+    owned = defaultdict(list)
+    for device in devices_of(db, [person["id"] for person in people], cutoff):
+        owned[device["user_id"]].append(device_summary(db, device, now))
+    return {
+        "now": now, "authenticated": viewer is not None,
+        "people": [{"username": person["username"], "self": bool(viewer and person["id"] == viewer["id"]),
+                    "shared": bool(person["shared"]), "devices": owned[person["id"]]} for person in people],
     }
 
 
@@ -122,10 +157,12 @@ def board(db, viewer, now, cutoff, since=None):
     start = max(base, cutoff)
     people = visible_people(db, viewer)
     ids = [person["id"] for person in people]
+    if not ids:
+        return {"now": now, "base": base, "authenticated": viewer is not None, "apps": [], "app_colors": [], "people": []}
     marks = ",".join("?" * len(ids))
-    apps, runs, lifecycle = Apps(), defaultdict(list), defaultdict(list)
+    apps, runs, lifecycle = Apps(db), defaultdict(list), defaultdict(list)
     for device, app, process, s, e in load_runs(db, f"user_id IN ({marks})", ids, start, now):
-        runs[device].append([round(s - base), round(e - base), apps(app, process)])
+        runs[device].append([round(s - base), round(e - base), apps(app, process, device)])
     for device, at, reason in db.execute(
             f"SELECT device_id,occurred_at,reason FROM status_events WHERE user_id IN ({marks}) "
             "AND reason<>'periodic' AND occurred_at>? AND occurred_at<=? ORDER BY occurred_at", [*ids, start, now]):
@@ -135,8 +172,8 @@ def board(db, viewer, now, cutoff, since=None):
         summary = device_summary(db, device, now)
         summary["runs"], summary["marks"] = runs[device["id"]], lifecycle[device["id"]]
         owned[device["user_id"]].append(summary)
-    return {"now": now, "base": base, "apps": apps.items,
-            "people": [{"username": person["username"], "self": person["id"] == viewer["id"],
+    return {"now": now, "base": base, "authenticated": viewer is not None, "apps": apps.items, "app_colors": apps.colors,
+            "people": [{"username": person["username"], "self": bool(viewer and person["id"] == viewer["id"]),
                         "shared": bool(person["shared"]), "devices": owned[person["id"]]} for person in people]}
 
 
@@ -161,20 +198,21 @@ def person_view(db, person, viewer, now, cutoff, start, end, device_id=""):
     bin_size = 0 if span <= 50 * 3600 else 900 if span <= 32 * 86400 else 1800
     where, params = ("user_id=? AND device_id=?", [person["id"], device_id]) if device_id else ("user_id=?", [person["id"]])
     runs = load_runs(db, where, params, low, high) if high > low else []
-    apps, totals, ranking = Apps(), defaultdict(float), defaultdict(float)
+    apps, totals, ranking = Apps(db), defaultdict(float), defaultdict(float)
     for device, app, process, s, e in runs:
         totals[device] += e - s
-        ranking[apps(app, process)] += e - s
+        ranking[apps(app, process, device)] += e - s
     ordered = sorted(ranking.items(), key=lambda item: -item[1])
     payload = {
         "now": now, "start": start, "end": end, "bin": bin_size, "device": device_id,
-        "person": {"username": person["username"], "self": person["id"] == viewer["id"], "shared": bool(person["shared"])},
+        "person": {"username": person["username"], "self": bool(viewer and person["id"] == viewer["id"]), "shared": bool(person["shared"])},
         "devices": [device_summary(db, device, now) for device in devices],
         "apps": apps.items,
+        "app_colors": apps.colors,
         "totals": {device: round(seconds) for device, seconds in totals.items()},
         "ranking": [[index, round(seconds)] for index, seconds in ordered[:40]],
         "other": round(sum(seconds for _, seconds in ordered[40:])),
-        "records": [[device, round(s - start), round(e - start), apps(app, process)]
+        "records": [[device, round(s - start), round(e - start), apps(app, process, device)]
                     for device, app, process, s, e in sorted(runs, key=lambda run: -run[4])[:100]],
     }
     streak = longest_streak(runs)
@@ -182,7 +220,7 @@ def person_view(db, person, viewer, now, cutoff, start, end, device_id=""):
     if bin_size:
         bins = defaultdict(lambda: defaultdict(float))
         for device, app, process, s, e in runs:
-            index, t = apps(app, process), s
+            index, t = apps(app, process, device), s
             while t < e:
                 slot = int((t - start) // bin_size)
                 edge = max(min(e, start + (slot + 1) * bin_size), t + 1e-6)
@@ -193,7 +231,7 @@ def person_view(db, person, viewer, now, cutoff, start, end, device_id=""):
     else:
         payload["runs"] = defaultdict(list)
         for device, app, process, s, e in runs:
-            payload["runs"][device].append([round(s - start), round(e - start), apps(app, process)])
+            payload["runs"][device].append([round(s - start), round(e - start), apps(app, process, device)])
     # Battery readings draw a line over a day; longer ranges only list power events.
     query = ("SELECT device_id,occurred_at,reason,battery_percent,charging,ac_online FROM status_events "
              f"WHERE {where} AND occurred_at>? AND occurred_at<=?")

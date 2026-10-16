@@ -25,11 +25,13 @@ class Config:
     silent_start: bool = False
     idle_seconds: int = 300
     upload_seconds: int = 30
+    upload_on_app_change: bool = False
     battery_enabled: bool = True
     battery_seconds: int = 300
     upload_on_shutdown: bool = True
     upload_on_suspend: bool = True
     app_aliases: dict = field(default_factory=dict)
+    app_colors: dict = field(default_factory=dict)
     theme: str = "system"
     fallback_host: str = ""
     fallback_port: int = 8080
@@ -120,6 +122,8 @@ class Config:
         self.device_name = self.device_name.strip()
         if not 0 <= self.idle_seconds <= 3600 or not 10 <= self.upload_seconds <= 300:
             raise ValueError("空闲阈值须为 0–3600 秒，上传间隔须为 10–300 秒")
+        if not isinstance(self.upload_on_app_change, bool):
+            raise ValueError("前台应用变化上传选项无效")
         if not isinstance(self.battery_enabled, bool) or not 30 <= self.battery_seconds <= 3600:
             raise ValueError("电池状态采集间隔须为 30–3600 秒")
         if not isinstance(self.upload_on_shutdown, bool) or not isinstance(self.upload_on_suspend, bool):
@@ -137,6 +141,8 @@ class Config:
                 raise ValueError("应用名翻译的进程名和显示名须为 1–200 个字符")
             aliases[process] = display_name
         self.app_aliases = aliases
+        from .app_colors import normalize_colors
+        self.app_colors = normalize_colors(self.app_colors)
         uuid.UUID(self.device_id)
         if not isinstance(self.device_ids, dict):
             raise ValueError("设备身份配置无效")

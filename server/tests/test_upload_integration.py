@@ -12,6 +12,7 @@ import uvicorn
 
 from focus_agent.config import Config
 from focus_agent.network import Uploader, check_connection, request_json
+from focus_agent import network
 from focus_agent.management import ManagementSession
 from focus_agent.store import EventStore
 from server.app.config import Settings
@@ -21,6 +22,59 @@ from server.app.security import token_hash
 from test_server import PASSWORD, batch
 import pytest
 from fastapi.responses import JSONResponse
+
+
+def test_real_http_foreground_changes_retry_latest_state_and_preserve_usage(tmp_path, monkeypatch):
+    from focus_agent.tracker import Application
+
+    app = create_app(Settings(tmp_path / "foreground.db", admin_username="admin", admin_password=PASSWORD))
+    app.state.database.initialize()
+    key = "foreground-token-" + "x" * 30
+    with app.state.database.connect() as db:
+        db.execute("UPDATE users SET upload_hash=?,shared=1 WHERE id=1", (token_hash(key),))
+    unavailable = threading.Event()
+
+    @app.middleware("http")
+    async def simulated_outage(request, call_next):
+        if request.url.path == "/api/v1/usage/batches" and unavailable.is_set():
+            await request.body()
+            return JSONResponse({"detail": "temporary outage"}, 503)
+        return await call_next(request)
+
+    monkeypatch.setattr(network, "machine_identity", lambda: "a" * 64)
+    with real_server(app) as port:
+        config = Config(host="127.0.0.1", port=port, api_key=key, account_id=1, upload_on_app_change=True, upload_seconds=10)
+        store = EventStore(tmp_path / "events.db")
+        uploader = Uploader(store, config)
+        uploader.observe_foreground(Application("Browser", "browser.exe"), time.time())
+        uploader.start()
+
+        def live_device():
+            return request_json(config, "/api/web/live")["people"][0]["devices"][0]
+
+        try:
+            assert uploader.messages.get(timeout=3)[0]
+            assert live_device()["last"]["process"] == "browser.exe"
+            unavailable.set()
+            usage = batch()["events"]
+            store.add(config, usage)
+            uploader.observe_foreground(Application("Editor", "editor.exe"), time.time())
+            assert not uploader.messages.get(timeout=3)[0]
+            assert store.counts(config.destination) == (1, 1)
+            unavailable.clear()
+            uploader.observe_foreground(Application("Terminal", "terminal.exe"), time.time())
+            # App changes update the snapshot during backoff; the scheduled retry sends the latest one.
+            assert uploader.messages.get(timeout=12)[0]
+            assert live_device()["last"]["process"] == "terminal.exe"
+            assert store.counts(config.destination) == (0, 0)
+            uploader.observe_foreground(None, time.time())
+            assert uploader.messages.get(timeout=3)[0]
+            assert live_device()["state"] == "idle"
+            with app.state.database.connect() as db:
+                assert db.execute("SELECT COUNT(*),SUM(duration_seconds) FROM events").fetchone()[:] == (1, 30)
+        finally:
+            uploader.stop()
+            uploader.thread.join(3)
 
 
 @contextmanager
@@ -41,6 +95,151 @@ def real_server(app):
         server.should_exit = True
         thread.join(5)
         listener.close()
+
+
+def test_real_http_compressed_backlog_and_lost_ack_keep_exact_usage(tmp_path, monkeypatch):
+    import gzip
+
+    app = create_app(Settings(tmp_path / "compressed.db", admin_username="admin", admin_password=PASSWORD))
+    app.state.database.initialize()
+    key = "compressed-upload-token-" + "x" * 30
+    with app.state.database.connect() as db:
+        db.execute("UPDATE users SET upload_hash=? WHERE id=1", (token_hash(key),))
+    requests, lose_ack = [], [True]
+
+    @app.middleware("http")
+    async def capture_and_drop_one_ack(request, call_next):
+        is_upload = request.url.path == "/api/v1/usage/batches"
+        compressed = request.headers.get("content-encoding") == "gzip"
+        if is_upload:
+            data = await request.body()
+            body = json.loads(gzip.decompress(data) if compressed else data)
+            requests.append((compressed, len(data), body))
+        response = await call_next(request)
+        if is_upload and compressed and lose_ack[0]:
+            assert response.status_code == 200
+            lose_ack[0] = False
+            return JSONResponse({"detail": "Synthetic lost acknowledgement after commit"}, 503)
+        return response
+
+    monkeypatch.setattr(network, "machine_identity", lambda: "a" * 64)
+    with real_server(app) as port:
+        current = Config(host="127.0.0.1", port=port, api_key=key, account_id=1)
+        store = EventStore(tmp_path / "queue.db")
+        now = time.time()
+        records = [batch(end=now - 30 * offset)["events"][0] for offset in range(1200, 0, -1)]
+        store.add(current, records)
+        uploader = Uploader(store, current)
+        uploader.start()
+        try:
+            assert uploader.messages.get(timeout=5)[0]
+            assert not uploader.messages.get(timeout=5)[0]
+            assert store.counts(current.destination) == (700, 700)
+            uploader.trigger()
+            assert uploader.messages.get(timeout=5)[0]
+            assert uploader.messages.get(timeout=5)[0]
+            assert store.counts(current.destination) == (0, 0)
+        finally:
+            uploader.stop()
+            uploader.thread.join(5)
+        assert [len(body["events"]) for _, _, body in requests] == [500, 500, 500, 200]
+        assert [compressed for compressed, _, _ in requests] == [False, True, True, True]
+        assert requests[1][2]["events"] == requests[2][2]["events"]
+        assert requests[1][1] < len(json.dumps(requests[1][2]).encode()) * .25
+        with app.state.database.connect() as db:
+            assert db.execute("SELECT COUNT(*),SUM(duration_seconds) FROM events").fetchone()[:] == (1200, 36000)
+
+
+def test_real_http_color_sync_retries_offline_and_restores_history_defaults(tmp_path, monkeypatch):
+    from focus_agent.app_colors import default_color
+    app = create_app(Settings(tmp_path / "colors.db", admin_username="admin", admin_password=PASSWORD))
+    app.state.database.initialize()
+    key = "program-colors-token-" + "x" * 30
+    with app.state.database.connect() as db:
+        db.execute("UPDATE users SET upload_hash=?,shared=1 WHERE id=1", (token_hash(key),))
+    unavailable = threading.Event()
+    unavailable.set()
+
+    @app.middleware("http")
+    async def simulated_outage(request, call_next):
+        if request.url.path == "/api/v1/agent/app-colors" and unavailable.is_set():
+            await request.body()
+            return JSONResponse({"detail": "temporary outage"}, 503)
+        return await call_next(request)
+
+    monkeypatch.setattr(network, "machine_identity", lambda: "a" * 64)
+    with real_server(app) as port:
+        current = Config(host="127.0.0.1", port=port, api_key=key, account_id=1,
+                         device_name="配色测试电脑", app_colors={"example.exe": "teal"})
+        store = EventStore(tmp_path / "queue.db")
+        store.add(current, batch()["events"])
+        uploader = Uploader(store, current)
+        uploader.start()
+        try:
+            success, message = uploader.messages.get(timeout=5)
+            assert not success and "配色同步失败" in message
+            assert uploader.color_state is None and store.counts(current.destination) == (0, 0)
+            unavailable.clear()
+            uploader.trigger()
+            success, message = uploader.messages.get(timeout=5)
+            assert success and "配色已同步" in message
+            data = request_json(current, "/api/web/board")
+            assert data["app_colors"] == ["teal"]
+            reset = replace(current, app_colors={})
+            uploader.configure(reset)
+            assert uploader.messages.get(timeout=5)[0]
+            assert request_json(reset, "/api/web/board")["app_colors"] == [default_color("example.exe")]
+            with app.state.database.connect() as db:
+                assert db.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 1
+                assert db.execute("SELECT machine_id FROM device_computers").fetchone()[0] == "a" * 64
+        finally:
+            uploader.stop()
+            uploader.thread.join(5)
+
+
+def test_real_http_device_name_identity_upgrade_conflict_and_rename(tmp_path, monkeypatch):
+    app = create_app(Settings(tmp_path / "names.db", admin_username="admin", admin_password=PASSWORD))
+    app.state.database.initialize()
+    key = "device-name-token-" + "x" * 30
+    with app.state.database.connect() as db:
+        db.execute("UPDATE users SET upload_hash=? WHERE id=1", (token_hash(key),))
+    machine = ["a" * 64]
+    monkeypatch.setattr(network, "machine_identity", lambda: machine[0])
+    with real_server(app) as port:
+        original = Config(host="127.0.0.1", port=port, api_key=key, account_id=1, device_name="家用电脑")
+        assert check_connection(original)["upload_verified"]
+        records = batch()["events"]
+        store = EventStore(tmp_path / "queue.db")
+        store.add(original, records)
+        # A clean client installation gets a new UUID but must reuse the name's history.
+        upgraded = Config(host=original.host, port=port, api_key=key, account_id=1, device_name=original.device_name)
+        assert original.device_id != upgraded.device_id
+        assert check_connection(upgraded)["upload_verified"]
+        uploader = Uploader(store, upgraded)
+        uploader.start()
+        try:
+            assert uploader.flush(3)
+        finally:
+            uploader.stop()
+            uploader.thread.join(3)
+        machine[0] = "b" * 64
+        other = Config(host=original.host, port=port, api_key=key, account_id=1, device_name=original.device_name)
+        with pytest.raises(network.DeviceNameConflict, match="设备名称已被占用"):
+            check_connection(other)
+        store.add(other, batch()["events"])
+        renamed = replace(other, device_name="另一台家用电脑")
+        assert check_connection(renamed)["upload_verified"]
+        uploader = Uploader(store, renamed)
+        uploader.start()
+        try:
+            assert uploader.flush(3)
+        finally:
+            uploader.stop()
+            uploader.thread.join(3)
+        with app.state.database.connect() as db:
+            assert db.execute("SELECT COUNT(*) FROM devices").fetchone()[0] == 2
+            assert db.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 2
+            assert {row[0] for row in db.execute("SELECT name FROM devices")} == {"家用电脑", "另一台家用电脑"}
 
 
 def test_real_http_management_and_upload_permissions(tmp_path):
@@ -316,18 +515,20 @@ def test_gui_save_syncs_historical_and_new_names_over_real_http_and_retries(tmp_
             session.close()
 
 
-def test_old_server_keeps_uploading_and_reports_missing_history_sync(tmp_path):
+@pytest.mark.parametrize("missing", ["app-aliases", "app-colors"])
+def test_old_server_keeps_uploading_and_reports_missing_history_sync(tmp_path, missing):
     app = create_app(Settings(tmp_path / "legacy.db", admin_username="admin", admin_password=PASSWORD))
 
     @app.middleware("http")
     async def legacy_server(request, call_next):
-        if request.url.path == "/api/v1/agent/app-aliases":
+        if request.url.path == "/api/v1/agent/" + missing:
             await request.body()
             return JSONResponse({"detail": "Not Found"}, 404)
         return await call_next(request)
 
     with real_server(app) as port:
-        config = Config(host="127.0.0.1", port=port, app_aliases={"example.exe": "新名称"})
+        config = Config(host="127.0.0.1", port=port, app_aliases={"example.exe": "新名称"},
+                        app_colors={"example.exe": "teal"})
         session = ManagementSession(config)
         session.login("admin", PASSWORD)
         config.api_key = session.request("/token", {}, "POST")["api_key"]

@@ -2,6 +2,7 @@ import re
 import sqlite3
 import time
 from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
 from uuid import uuid4
 
@@ -112,13 +113,34 @@ def authorized(client):
 
 
 def test_login_and_password_hash(client):
-    assert client.get("/", follow_redirects=False).headers["location"] == "/login"
+    assert client.get("/", follow_redirects=False).status_code == 200
     assert "用户名或密码错误" in login(client, password="wrong").text
     assert "data-board" in login(client).text
     encoded = password_hash(PASSWORD)
     assert PASSWORD not in encoded
     assert verify_password(PASSWORD, encoded)
     assert not verify_password("bad", encoded)
+
+
+@pytest.mark.parametrize("username", ["admin", "missing-member", "<script>alert(1)</script>"])
+def test_login_error_stays_in_form_and_allows_retry(client, username):
+    initial = client.get("/login")
+    assert 'role="alert"' not in initial.text
+    nonce = hidden(initial.text)
+    response = client.post("/login", data={"csrf": nonce, "username": username,
+                                           "password": "submitted-wrong-password"})
+    assert response.status_code == 200
+    form = re.search(r'<form class="login-form"[^>]*>(.*?)</form>', response.text, re.S)[1]
+    assert response.text.count('role="alert"') == form.count('role="alert"') == 1
+    assert "登录未成功" in form and "请核对后重试，或联系管理员" in form
+    assert f'name="username" value="{escape(username)}"' in form
+    assert "submitted-wrong-password" not in response.text
+    assert re.search(r'<input type="password"[^>]* autofocus', form)
+    assert form.count(" autofocus") == 1
+    assert hidden(response.text) != nonce
+    assert 'aria-describedby="login-error"' in response.text
+    retry = client.post("/login", data={"csrf": hidden(response.text), "username": "admin", "password": PASSWORD})
+    assert "data-board" in retry.text
 
 
 def test_ingestion_idempotency(authorized):
@@ -160,11 +182,11 @@ def test_tenant_isolation_and_device_ownership(authorized):
     add_member(client, "alice")
     switch_to(client, "alice")
     alice_key = upload_key(client)
-    # Records stay private until their owner shares them, the admin's included.
-    assert names(board(client)) == ["alice"]
-    assert "Test PC" not in client.get("/api/web/board").text
-    assert client.get("/api/web/people/admin", params=last_day()).status_code == 404
-    assert client.get("/people/admin").status_code == 404
+    # Signed-in members may read every enabled account; upload ownership stays separate.
+    assert names(board(client)) == ["alice", "admin"]
+    assert "Test PC" in client.get("/api/web/board").text
+    assert client.get("/api/web/people/admin", params=last_day()).status_code == 200
+    assert client.get("/people/admin").status_code == 200
     assert client.get("/admin/users").status_code == 403
     assert send(client, alice_key, body).status_code == 409
     assert send(client, alice_key, batch()).status_code == 200
@@ -175,23 +197,23 @@ def test_sharing_is_opt_in_and_can_be_withdrawn(authorized):
     assert send(client, admin_key, batch()).status_code == 200
     add_member(client, "alice")
     add_member(client, "bob", shared=True)
-    # The admin sees every account on the members page, but only shared records anywhere else.
-    assert names(board(client)) == ["admin", "bob"]
-    assert client.get("/api/web/people/alice", params=last_day()).status_code == 404
-    assert client.get("/people/alice").status_code == 404
+    # All signed-in members can read records even when they are not public.
+    assert names(board(client)) == ["admin", "alice", "bob"]
+    assert client.get("/api/web/people/alice", params=last_day()).status_code == 200
+    assert client.get("/people/alice").status_code == 200
     assert client.get("/people/admin").status_code == 200
     members = client.get("/admin/users").text
     assert "alice" in members and "未公开" in members
 
     switch_to(client, "alice")
     assert send(client, upload_key(client), batch()).status_code == 200
-    assert names(board(client)) == ["alice", "bob"]
+    assert names(board(client)) == ["alice", "admin", "bob"]
     set_sharing(client, True)
 
     switch_to(client, "bob")
     data = board(client)
-    assert names(data) == ["bob", "alice"]
-    assert [person["self"] for person in data["people"]] == [True, False]
+    assert names(data) == ["bob", "admin", "alice"]
+    assert [person["self"] for person in data["people"]] == [True, False, False]
     other = client.get("/api/web/people/alice", params=last_day())
     assert other.status_code == 200
     assert other.json()["person"] == {"username": "alice", "self": False, "shared": True}
@@ -200,8 +222,11 @@ def test_sharing_is_opt_in_and_can_be_withdrawn(authorized):
     switch_to(client, "alice")
     set_sharing(client, False)
     switch_to(client, "bob")
+    assert names(board(client)) == ["bob", "admin", "alice"]
+    assert client.get("/api/web/people/alice", params=last_day()).status_code == 200
+    client.cookies.clear()
     assert names(board(client)) == ["bob"]
-    assert client.get("/api/web/people/alice", params=last_day()).status_code == 404
+    assert client.get("/api/web/people/alice", params=last_day()).status_code == 401
 
 
 def test_disabled_account_leaves_the_board(authorized):
@@ -285,10 +310,125 @@ def test_person_view_rejects_bad_ranges_and_foreign_devices(authorized):
     assert client.get("/api/web/people/bob", params={**last_day(), "device": foreign}).status_code == 200
 
 
-def test_web_api_requires_a_session(client):
-    assert client.get("/api/web/board").status_code == 401
+def test_public_board_is_available_without_a_session(client):
+    page = client.get("/", follow_redirects=False)
+    assert page.status_code == 200
+    assert "公开设备使用时间" in page.text and 'data-board-scope="public"' in page.text
+    assert 'href="/login?next=members"' in page.text
+    assert "/people/admin" not in page.text and "调整公开设置" not in page.text
+    data = board(client)
+    assert data["people"] == [] and data["apps"] == [] and data["authenticated"] is False
     assert client.get("/api/web/people/admin", params=last_day()).status_code == 401
     assert client.get("/people/admin", follow_redirects=False).headers["location"] == "/login"
+    assert client.get("/?view=members", follow_redirects=False).headers["location"] == "/login?next=members"
+    assert client.get("/settings").status_code == 401
+    assert client.get("/admin/users").status_code == 401
+
+
+def test_guests_can_read_only_public_devices_and_history(authorized):
+    client, key = authorized
+    private = batch()
+    private["device"]["name"] = "Private device"
+    private["events"][0]["app_name"] = "Private application"
+    assert send(client, key, private).status_code == 200
+    add_member(client, "alice", shared=True)
+    public = seed_device(client, "alice", "Public laptop", last_seen=5,
+                         usage=[(600, 300)], power=[(620, "startup")])
+    client.cookies.clear()
+
+    data = board(client)
+    assert names(data) == ["alice"] and data["authenticated"] is False
+    assert data["people"][0]["self"] is False
+    assert data["people"][0]["devices"][0]["id"] == public
+    for response in (client.get("/"), client.get("/api/web/board")):
+        for hidden_value in ("Private device", "Private application", private["device"]["id"], "/people/admin"):
+            assert hidden_value not in response.text
+    detail = client.get("/people/alice")
+    assert detail.status_code == 200 and "所有访客可见" in detail.text
+    assert "我的记录" not in detail.text and 'href="/settings"' not in detail.text
+    for days in (1, 7, 30, 365):
+        current = time.time()
+        history = client.get("/api/web/people/alice", params={"start": current - days * 86400,
+                                                              "end": current, "device": public})
+        assert history.status_code == 200
+        assert history.json()["person"] == {"username": "alice", "self": False, "shared": True}
+        assert history.json()["totals"][public] == 300
+        assert history.json()["status"]
+    assert client.get("/api/web/people/admin", params={**last_day(), "device": private["device"]["id"]}).status_code == 401
+    assert client.get("/api/web/people/alice", params={**last_day(), "device": private["device"]["id"]}).status_code == 404
+
+
+def test_stopping_public_access_keeps_member_access_and_removes_guest_access(authorized):
+    client, _ = authorized
+    add_member(client, "alice", shared=True)
+    public = seed_device(client, "alice", "Public laptop", last_seen=5, usage=[(65, 5)])
+    client.cookies.clear()
+    assert names(board(client)) == ["alice"]
+    assert client.get("/api/web/people/alice", params=last_day()).status_code == 200
+    switch_to(client, "alice")
+    set_sharing(client, False)
+    switch_to(client, "admin")
+    assert client.get("/api/web/people/alice", params=last_day()).json()["totals"][public] == 60
+    client.cookies.clear()
+    assert board(client)["people"] == []
+    assert public not in client.get("/").text
+    assert client.get("/api/web/people/alice", params=last_day()).status_code == 401
+    assert client.get("/people/alice", follow_redirects=False).headers["location"] == "/login"
+
+
+def test_all_members_can_read_unpublished_records_but_cannot_edit_other_accounts(authorized):
+    client, key = authorized
+    assert send(client, key, batch()).status_code == 200
+    add_member(client, "alice")
+    switch_to(client, "alice")
+    assert board(client)["authenticated"] is True
+    assert client.get("/api/web/people/admin", params=last_day()).status_code == 200
+    assert "仅登录成员可见" in client.get("/people/admin").text
+    assert 'data-board-scope="public"' in client.get("/").text
+    assert 'data-board-scope="members"' in client.get("/?view=members").text
+    assert client.get("/admin/users").status_code == 403
+    csrf = hidden(client.get("/settings").text)
+    assert client.post("/settings/sharing", data={"csrf": csrf, "shared": "on", "user_id": 1}).status_code == 200
+    with client.app.state.database.connect() as db:
+        assert db.execute("SELECT shared FROM users WHERE username='admin'").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("session_state", ["expired", "disabled", "invalid"])
+def test_invalid_sessions_never_expose_member_records(authorized, session_state):
+    client, key = authorized
+    assert send(client, key, batch()).status_code == 200
+    add_member(client, "alice", shared=True)
+    if session_state == "invalid":
+        client.cookies.clear()
+        client.cookies.set("focus_session", "invalid-session")
+    else:
+        with client.app.state.database.connect() as db:
+            if session_state == "expired":
+                db.execute("UPDATE sessions SET expires_at=?", (time.time() - 1,))
+            else:
+                db.execute("UPDATE users SET enabled=0 WHERE username='admin'")
+    assert names(board(client)) == ["alice"]
+    assert board(client)["authenticated"] is False
+    assert "Test PC" not in client.get("/").text
+    assert client.get("/api/web/people/admin", params=last_day()).status_code == 401
+
+
+def test_login_returns_to_member_board_and_logout_returns_to_public_board(client):
+    form = client.get("/login?next=members")
+    failed = client.post("/login", data={"csrf": hidden(form.text), "next": "members",
+                                         "username": "admin", "password": "wrong"})
+    assert 'name="next" value="members"' in failed.text
+    logged_in = client.post("/login", data={"csrf": hidden(failed.text), "next": "members",
+                                            "username": "admin", "password": PASSWORD}, follow_redirects=False)
+    assert logged_in.headers["location"] == "/?view=members"
+    assert client.get("/login?next=members", follow_redirects=False).headers["location"] == "/?view=members"
+    signed_out = client.post("/logout", data={"csrf": hidden(client.get("/settings").text)}, follow_redirects=False)
+    assert signed_out.headers["location"] == "/"
+    assert board(client)["authenticated"] is False
+    form = client.get("/login?next=https://example.com")
+    logged_in = client.post("/login", data={"csrf": hidden(form.text), "next": "https://example.com",
+                                            "username": "admin", "password": PASSWORD}, follow_redirects=False)
+    assert logged_in.headers["location"] == "/"
 
 
 def test_longest_streak_bridges_short_pauses():
@@ -327,10 +467,33 @@ def test_csrf_protection(authorized):
 
 
 def test_login_csrf_and_rate_limit(client):
-    assert client.post("/login", data={"username": "admin", "password": PASSWORD}).status_code == 403
-    for _ in range(10):
+    expired = client.post("/login", data={"username": "admin", "password": PASSWORD})
+    assert expired.status_code == 403
+    assert "登录页面已过期，请重新输入密码后登录" in expired.text
+    assert '<form class="login-form"' in expired.text
+    assert f'name="csrf" value="{client.cookies["focus_login_csrf"]}"' in expired.text
+    retry = client.post("/login", data={"csrf": hidden(expired.text), "username": "admin", "password": "wrong"})
+    assert retry.status_code == 200 and "用户名或密码错误" in retry.text
+    # A rejected CSRF token does not consume an attempt; the valid retry above does.
+    for _ in range(9):
         assert login(client, password="wrong").status_code == 200
-    assert login(client).status_code == 429
+    limited = login(client)
+    assert limited.status_code == 429
+    assert limited.headers["Retry-After"] == "60"
+    assert '<form class="login-form"' in limited.text
+    assert "请一分钟后重试" in limited.text
+
+
+def test_login_csrf_mismatch_refreshes_form_without_signing_in(client):
+    client.get("/login")
+    response = client.post("/login", data={"csrf": "stale-token", "username": "admin", "password": PASSWORD})
+    assert response.status_code == 403
+    assert 'name="username" value="admin"' in response.text
+    assert PASSWORD not in response.text
+    assert board(client)["authenticated"] is False
+    assert client.get("/settings").status_code == 401
+    retry = client.post("/login", data={"csrf": hidden(response.text), "username": "admin", "password": PASSWORD})
+    assert "data-board" in retry.text
 
 
 @pytest.mark.parametrize("mutate", [
@@ -359,7 +522,7 @@ def test_old_records_acknowledged_and_trimmed(authorized):
     result = send(client, key, old).json()
     assert result["expired"] == 1
     assert result["acknowledged_ids"] == [old["events"][0]["id"]]
-    boundary = batch(end=database.cutoff()+15, duration=30)
+    boundary = batch(device=old["device"]["id"], end=database.cutoff()+15, duration=30)
     assert send(client, key, boundary).status_code == 200
     with database.connect() as db:
         row = db.execute("SELECT * FROM events").fetchone()

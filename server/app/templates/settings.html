@@ -31,14 +31,14 @@
   <div class="sheet-body">
     <div class="switch-line">
       <span class="lamp {{ 'is-active' if user.shared else 'is-off' }}" aria-hidden="true"></span>
-      <p class="lede"><b>{{ '已公开给其他成员' if user.shared else '只有你自己能看到' }}</b>
-        {% if user.shared %}其他成员能在总览中看到你的设备状态、正在使用的应用和完整记录。{% else %}公开后，其他成员能在总览中看到你的设备状态、正在使用的应用和完整记录。{% endif %}</p>
+      <p class="lede"><b>{{ '所有访客可见' if user.shared else '仅登录成员可见' }}</b>
+        {% if user.shared %}任何人无需登录，就能查看你的全部设备状态、正在使用的应用、使用时长和历史记录。{% else %}当前所有已登录成员都能查看你的设备与记录。公开后，未登录访客也可以查看。{% endif %}</p>
     </div>
     <form action="/settings/sharing" method="post" class="row-actions">
       <input type="hidden" name="csrf" value="{{ user.csrf }}">
       <input type="hidden" name="shared" value="{{ 'off' if user.shared else 'on' }}">
       <button class="btn{{ '' if user.shared else ' is-primary' }}">{{ '停止公开' if user.shared else '公开我的记录' }}</button>
-      <span class="hint">随时可以改。管理员也只能看到公开的记录。</span>
+      <span class="hint">此设置对本账户的全部设备生效；停止公开后，仍可由所有已登录成员查看。</span>
     </form>
   </div>
 </section>

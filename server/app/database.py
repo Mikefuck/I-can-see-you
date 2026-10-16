@@ -4,6 +4,7 @@ import time
 from contextlib import contextmanager
 
 from .security import password_hash, valid_username, verify_password
+from .devices import migrate_device_names
 
 
 SCHEMA = """
@@ -49,6 +50,32 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS device_app_aliases (
     device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
     aliases TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS device_app_colors (
+    device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+    colors TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS device_foreground (
+    device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+    observed_at REAL NOT NULL,
+    since REAL NOT NULL,
+    app_name TEXT,
+    process_name TEXT
+);
+CREATE TABLE IF NOT EXISTS device_clients (
+    id TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS device_clients_device ON device_clients(device_id);
+CREATE TABLE IF NOT EXISTS device_computers (
+    device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+    machine_id TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS device_event_ids (
+    client_id TEXT NOT NULL REFERENCES device_clients(id) ON DELETE CASCADE,
+    event_id TEXT NOT NULL,
+    canonical_event_id TEXT NOT NULL,
+    PRIMARY KEY(client_id,event_id)
 );
 CREATE TABLE IF NOT EXISTS status_events (
     row_id INTEGER PRIMARY KEY,
@@ -105,6 +132,8 @@ class Database:
                 db.execute("ALTER TABLE users ADD COLUMN shared INTEGER NOT NULL DEFAULT 0")
             if "payload_hash" not in {row["name"] for row in db.execute("PRAGMA table_info(events)")}:
                 db.execute("ALTER TABLE events ADD COLUMN payload_hash TEXT")
+            db.execute("BEGIN IMMEDIATE")
+            migrate_device_names(db)
             self._sync_admin(db)
         self.cleanup()
 
@@ -164,6 +193,7 @@ class Database:
         with self.connect() as db:
             db.execute("DELETE FROM events WHERE ended_at <= ?", (cutoff,))
             db.execute("DELETE FROM status_events WHERE occurred_at <= ?", (cutoff,))
+            db.execute("DELETE FROM device_foreground WHERE observed_at <= ?", (cutoff,))
             # Trim a segment straddling the cutoff so no part older than the limit is retained.
             db.execute(
                 "UPDATE events SET duration_seconds=ended_at-?, started_at=? WHERE started_at < ?",

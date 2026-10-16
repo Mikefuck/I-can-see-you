@@ -2,25 +2,31 @@
 {% from '_clock.html' import clock %}
 {% block title %}登录 · 专注记录{% endblock %}
 {% block body_class %}is-login{% endblock %}
+{% block error_notice %}{% endblock %}
 {% block content %}
 <section class="login">
   <div class="login-dial">{{ clock("sbb-login") }}</div>
   <div class="login-copy">
     <p class="kicker">Focus Ledger</p>
     <h1 class="login-title">专注<br>记录</h1>
-    <p class="lede">一张按时间排开的时刻表：你和成员的每台设备此刻是否在线、在用什么，今天又用了多久。</p>
+    <p class="lede">登录后，查看所有成员的设备使用时间与历史记录，也可以管理自己的设备和公开设置。</p>
     <ul class="login-facts">
       <li><b>多设备</b><span>每台电脑一条时间线</span></li>
-      <li><b>自愿公开</b><span>成员自己决定谁能看到</span></li>
+      <li><b>公开可看</b><span>公开记录无需登录</span></li>
       <li><b>{{ retention }} 天</b><span>超出后自动删除</span></li>
     </ul>
   </div>
-  <form class="login-form" action="/login" method="post">
-    <h2 class="label">登录<small>Sign in</small></h2>
+  <form class="login-form" action="/login" method="post" aria-labelledby="login-heading"{% if error %} aria-describedby="login-error"{% endif %}>
+    <h2 class="label" id="login-heading">登录<small>Sign in</small></h2>
     <input type="hidden" name="csrf" value="{{ nonce }}">
-    <label class="field"><span>用户名</span><input name="username" autocomplete="username" required maxlength="40" autofocus spellcheck="false" autocapitalize="off"></label>
-    <label class="field"><span>密码</span><input type="password" name="password" autocomplete="current-password" required maxlength="256"></label>
+    <input type="hidden" name="next" value="{{ next_view }}">
+    <label class="field"><span>用户名</span><input name="username" value="{{ username | default('') }}" autocomplete="username" required maxlength="40"{% if not username %} autofocus{% endif %} spellcheck="false" autocapitalize="off"></label>
+    <label class="field"><span>密码</span><input type="password" name="password" autocomplete="current-password" required maxlength="256"{% if username %} autofocus{% endif %}></label>
+    {% if error %}
+    <div class="notice is-error login-error" id="login-error" role="alert"><b>登录未成功</b><span>{{ error }}</span></div>
+    {% endif %}
     <button class="btn is-primary is-wide">登录</button>
+    <a class="login-browse" href="/">直接浏览公开设备 <span aria-hidden="true">→</span></a>
     <p class="hint">账户由管理员创建。忘记密码请联系管理员。</p>
   </form>
 </section>

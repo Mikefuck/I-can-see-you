@@ -1,10 +1,11 @@
 from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QGridLayout, QHeaderView, QLabel, QLineEdit,
-    QMessageBox, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QMessageBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .management import ManagementSession
+from .controls import NoWheelSpinBox as QSpinBox
 from .motion import MotionButton as QPushButton, MotionCheckBox as QCheckBox
 
 

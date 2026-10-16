@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .app_colors import COLOR_IDS, process_key
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -14,6 +16,14 @@ class Device(StrictModel):
     name: str = Field(min_length=1, max_length=100)
     platform: str = Field(min_length=1, max_length=40, pattern=r"^[a-z0-9_-]+$")
     agent_version: str = Field(min_length=1, max_length=40)
+
+    @field_validator("name")
+    @classmethod
+    def device_name(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("设备名称不能为空")
+        return value
 
 
 class UsageEvent(StrictModel):
@@ -61,10 +71,35 @@ class DeviceStatusEvent(StrictModel):
 BatchEvent = Annotated[Union[UsageEvent, DeviceStatusEvent], Field(discriminator="kind")]
 
 
+class ForegroundApplication(StrictModel):
+    app_name: str = Field(min_length=1, max_length=200)
+    process_name: str = Field(min_length=1, max_length=200)
+
+
+class Foreground(StrictModel):
+    observed_at: datetime
+    since: datetime
+    app: ForegroundApplication | None
+
+    @field_validator("observed_at", "since")
+    @classmethod
+    def timezone_required(cls, value):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Timestamp must include a timezone")
+        return value
+
+    @model_validator(mode="after")
+    def valid_span(self):
+        if self.since > self.observed_at:
+            raise ValueError("Foreground start must not follow its observation")
+        return self
+
+
 class Batch(StrictModel):
     schema_version: Literal[1] = 1
     device: Device
     events: list[BatchEvent] = Field(max_length=500)
+    foreground: Foreground | None = None
 
 
 class AppAliases(StrictModel):
@@ -83,4 +118,22 @@ class AppAliases(StrictModel):
             if key in result:
                 raise ValueError("进程名重复")
             result[key] = name
+        return result
+
+
+class AppColors(StrictModel):
+    device: Device
+    app_colors: dict[str, str] = Field(max_length=500)
+
+    @field_validator("app_colors")
+    @classmethod
+    def valid_colors(cls, value):
+        result = {}
+        for process, color in value.items():
+            key = process_key(process)
+            if not 1 <= len(key) <= 200 or color not in COLOR_IDS:
+                raise ValueError("程序颜色须使用预设配色，进程名须为 1–200 个字符")
+            if key in result:
+                raise ValueError("进程名重复")
+            result[key] = color
         return result

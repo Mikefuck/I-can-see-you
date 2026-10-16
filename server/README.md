@@ -1,6 +1,12 @@
 # Linux Docker 服务端 · Focus Ledger
 
-发布目标：**Linux x86_64 / amd64**（Intel / AMD），镜像标签 `focusledger-server:2026.10.15-r6`。镜像内已包含 Python、服务端依赖和网页，部署时无需安装 Python，也无需联网拉取基础镜像。目标服务器需事先安装 Docker Engine 和 Docker Compose 插件。
+发布目标：**Linux x86_64 / amd64**（Intel / AMD），镜像标签 `focusledger-server:2026.10.16-r10`。镜像内已包含 Python、服务端依赖和网页，部署时无需安装 Python，也无需联网拉取基础镜像。目标服务器需事先安装 Docker Engine 和 Docker Compose 插件。
+
+本版为设备时间线、应用排行和使用记录加入程序配色。未设置时自动分配稳定默认色；客户端 0.2.8 的「设置 → 程序名称与颜色」可为本设备修改颜色，或恢复单个 / 全部默认色，保存后同步历史记录。12 种预设色分别适配网页浅色与深色主题。
+
+本版的设备看板与个人记录页新增「当前应用」栏，集中显示正在使用的前台应用名称、所属设备和最近上报时间，沿用原有时钟与时刻表布局。当前状态通过 SSE 实时更新，并每 10 秒独立校验，并兼容深浅色与手机；实际更新速度取决于客户端上传间隔。本次 Docker 发布包已包含这些功能。
+
+上传接口支持协商 gzip 压缩，配套客户端可减少上传流量；旧客户端继续使用普通 JSON。服务端对压缩体和解压后的 JSON 均执行 2MiB 上限，500 条批次限制、鉴权、事件确认和去重规则保持一致。需同时更新客户端 0.2.9 和服务端 r10，协议见 [docs/API.md](docs/API.md)。
 
 ## 使用离线发布包（推荐）
 
@@ -63,7 +69,7 @@ docker compose -f compose.panel.yaml up -d --force-recreate server
 | --- | --- |
 | `ADMIN_USERNAME` | 首次创建或同步密码的管理员用户名，默认 `admin`；3–40 位英文字母、数字、`_`、`.`、`-`；已有数据库时必须对应已启用的管理员，不用于重命名或提升普通成员权限 |
 | `ADMIN_PASSWORD` | 管理员密码，必须自行填写，12–256 个字符；更改并重新创建容器后同步生效 |
-| `FOCUSLEDGER_IMAGE` | 本地镜像标签，默认 `focusledger-server:2026.10.15-r6` |
+| `FOCUSLEDGER_IMAGE` | 本地镜像标签，默认 `focusledger-server:2026.10.16-r10` |
 | `FOCUSLEDGER_DATA_VOLUME` | 标准 Compose / 源码构建使用的固定外部数据卷名，默认 `focusledger-data`；新装需先创建，已有部署填写旧卷实际名称；面板版使用 `./focus-data` 文件夹，不读取此变量 |
 | `SERVER_PORT` | 对外端口，默认 `8080`；容器内部始终使用 `8080` |
 | `BIND_HOST` | 监听地址，默认 `0.0.0.0`；同机反向代理可设置 `127.0.0.1` |
@@ -71,6 +77,28 @@ docker compose -f compose.panel.yaml up -d --force-recreate server
 | `SECURE_COOKIES` | 内网 HTTP 为 `false`，HTTPS 部署为 `true` |
 
 公网部署请配置有效的 HTTPS 证书和反向代理，将整个站点转发到容器 8080 端口，允许至少 2 MiB 上传。客户端填写证书匹配的域名，协议选 `https`、端口通常为 `443`。如直接对外使用 8080 端口，需在服务器防火墙 / 云安全组放行所选端口。
+
+### 网页实时刷新与反向代理
+
+网页当前应用、设备状态与今日记录支持 SSE 实时更新；连接恢复后自动读取最新快照。每 10 秒的当前应用校验、每 30 秒的看板刷新和个人页原有定时刷新继续保留，实时连接中断时仍能更新。页面切到后台时释放连接，返回时重新连接；日期、日 / 周 / 月 / 年和设备筛选保留。
+
+若使用 Nginx 或面板反向代理，为事件流单独设置以下规则；将 `proxy_pass` 的地址替换为实际容器映射地址。其他路径继续使用原有代理规则。
+
+```nginx
+location = /api/web/events {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 75s;
+}
+```
+
+服务端每 15 秒发送心跳，并返回 `X-Accel-Buffering: no`。代理的读取超时应高于心跳间隔，CDN 或面板也须允许持续响应；若仍存在缓冲，网页会使用定时刷新并自动尝试恢复实时连接。HTTPS 继续使用有效证书和原有 Cookie 配置。
+
+当前镜像固定单个 Uvicorn worker，可直接使用进程内通知，无需增加服务或数据卷。若自行改成多 worker / 多副本，需要接入共享通知机制；现有定时刷新仍保留。容器给持续连接预留最多 5 秒优雅退出时间。此功能需要构建并部署更新后的服务端，客户端继续使用原上传接口。
 
 ## 从旧版本升级 / 修改管理员密码
 
@@ -90,7 +118,7 @@ docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}
 
 1. 在原部署目录按下文备份数据库，并记录上述原卷名；不要对旧版配置执行 `docker compose down -v`。
 2. 将新发布包中的 TAR 上传到服务器，执行 `docker load -i FocusLedger-server-linux-amd64.tar`。
-3. 更新 Compose，保持 `focus-data:/data` 挂载，并按上文将外部卷名指向旧卷。把 `image` 改为 `focusledger-server:2026.10.15-r6`；使用 `.env` 时同步修改 `FOCUSLEDGER_IMAGE`。`ADMIN_USERNAME` 填现有已启用的管理员用户名，`ADMIN_PASSWORD` 填 12–256 个字符的密码。
+3. 更新 Compose，保持 `focus-data:/data` 挂载，并按上文将外部卷名指向旧卷。把 `image` 改为 `focusledger-server:2026.10.16-r10`；使用 `.env` 时同步修改 `FOCUSLEDGER_IMAGE`。`ADMIN_USERNAME` 填现有已启用的管理员用户名，`ADMIN_PASSWORD` 填 12–256 个字符的密码。
 4. 在 1Panel 保存并重新部署原编排项目，或执行 `docker compose up -d --force-recreate server`。如果更换项目，先停止旧项目，并在新项目中使用相同的外部卷名；同一数据库只运行一个服务端实例。
 5. 查看 `docker compose logs --tail=100 server`，服务健康后使用配置中的用户名和密码登录。
 
@@ -103,7 +131,9 @@ docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}
 1. 用管理员账号登录网页，在「成员」创建用户。
 2. 每位用户登录自己的账户，在「账户」生成上传密钥。密钥原文只显示一次，请当场复制。
 3. 在 Windows 客户端填写服务器 IP / 域名、端口、协议、上传密钥和设备名称；保存通过验证后开始采集。地址框只填写 IP 或域名，不包含 `http://`、端口或路径。
-4. 记录默认只有本人能看到。成员在「账户」打开「公开」后，其他成员才能看到其设备与记录；随时可以关闭。管理员同样只能查看其他成员已公开的记录。
+4. 首页直接展示公开设备的今日使用时长、实时状态和时间线，无需登录；点击设备可查看日 / 周 / 月 / 年历史。记录默认仅供所有已登录成员查看，在看板的「成员可见」入口进入。成员在「账户」打开「公开」后，未登录访客也能查看本账户全部设备与记录；关闭后重新限制为已登录成员可见。
+
+公开设置按账户生效，不逐台设备设置。停用账户的记录对访客和登录成员均不可见。网页和查看接口均在服务端检查可见范围，未登录请求不会返回未公开的用户名、设备、应用或使用记录；账户修改与设备上传仍仅限账户本人，成员管理仍需管理员权限。
 
 0.2.0 起也可在 Windows 客户端的「服务端」页登录，管理员可创建、启用 / 停用用户并修改数据保留天数；普通成员可生成自己的上传密钥并自动填入连接设置。管理会话独立于上传密钥，密码不保存在客户端。缩短保留期会立即清理超期数据，新的天数保存到数据库，服务重启后仍然生效。
 
@@ -170,9 +200,9 @@ Windows 安装 Docker Desktop 并切换至 Linux 容器后，也可以执行 `py
 不使用 Python 脚本时，等效核心命令为：
 
 ```bash
-docker build --platform linux/amd64 -t focusledger-server:2026.10.15-r6 .
+docker build --platform linux/amd64 -t focusledger-server:2026.10.16-r10 .
 mkdir -p release
-docker save -o release/FocusLedger-server-linux-amd64.tar focusledger-server:2026.10.15-r6
+docker save -o release/FocusLedger-server-linux-amd64.tar focusledger-server:2026.10.16-r10
 ```
 
 本项目发布工具还需要镜像元信息和校验文件，因此重新生成完整 ZIP 时请使用 `build_image.py`。只打包服务端时，在项目根目录执行 `python tools/package_release.py --server-only`；两端都构建完成后可执行 `python tools/package_release.py` 联合打包。
@@ -201,6 +231,10 @@ docker save -o release/FocusLedger-server-linux-amd64.tar focusledger-server:202
 - **exec format error**：确认服务器为 x86_64；此发布包不适用于 ARM64。
 
 ## 开发与验证
+
+r7 的设备识别改为同账户内按名称匹配（去除首尾空白），不同账户可以重名。客户端电脑识别值一致时，不同版本或不同客户端 UUID 的上传归入同一设备；另一台电脑重名时返回 HTTP 409，配套客户端 0.2.6 提示修改设备名称。用量上传、空包心跳和应用名翻译使用同一套检查。
+
+首次运行新源码时会自动归并旧数据库中同账户同名的设备，保留使用记录、状态记录、应用名翻译和旧设备 UUID 的补传映射。旧协议没有电脑识别值，无法事后区分旧同名记录来自几台电脑；归并后的名称由第一台更新客户端绑定，其他电脑需改名。建议同步更新两端。旧客户端使用已登记 UUID 仍可上传，新 UUID 若占用已有名称则会被拒绝。
 
 `app/` 包含接口、数据库、鉴权和网页；网页读模型在 `app/board.py`，模板在 `app/templates`，静态文件在 `app/static`。内容安全策略禁止内联脚本、内联样式和事件属性，脚本不用 `innerHTML`。协议见 [docs/API.md](docs/API.md)。
 

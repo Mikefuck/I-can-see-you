@@ -6,8 +6,10 @@
   const SVG = "http://www.w3.org/2000/svg";
   const calm = matchMedia("(prefers-reduced-motion: reduce)");
   const BOARD_POLL = 30;
+  const LIVE_POLL = 10;
   // Wider ranges scan more rows on the server and change more slowly, so they refresh less often.
   const PERSON_POLL = { day: 60, week: 300, month: 300, year: 900 };
+  let realtime = null;
 
   // ——— DOM ———
   function h(tag, props, ...children) {
@@ -31,6 +33,8 @@
   }
   const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
   const stagger = (node, index) => { node.style.setProperty("--i", index); return node; };
+  const appColor = (colors, index) => colors && colors[index] || "slate";
+  const swatch = color => h("i", { class: "app-swatch app-color", "data-color": color, "aria-hidden": "true" });
   /** Entrance animations play only while a container is marked as entering; later redraws stay still. */
   function enter(node, ms = 2400) {
     if (calm.matches) return;
@@ -176,7 +180,7 @@
     if (!response.ok) {
       let detail = `服务器返回 ${response.status}`;
       try { detail = (await response.json()).detail || detail; } catch (error) { /* keep the status */ }
-      throw new Error(detail);
+      throw Object.assign(new Error(detail), { status: response.status });
     }
     return response.json();
   }
@@ -250,6 +254,109 @@
     return h("span", { class: `batt${low ? " is-low" : ""}` },
       h("span", { class: "batt-cell", "aria-hidden": "true" }, cell),
       `${info.percent}%${info.charging ? " 充电中" : ""}`);
+  }
+
+  // A compact view of the latest reported foreground apps, independent of history filters.
+  function initLiveApps() {
+    const host = doc.querySelector("[data-live-apps]");
+    if (!host) return null;
+    const list = host.querySelector("[data-live-list]");
+    const count = host.querySelector("[data-live-count]");
+    const note = host.querySelector("[data-live-note]");
+    const username = host.dataset.livePerson;
+    const scope = host.dataset.liveScope;
+    const seed = doc.getElementById("board-data");
+    let data = seed ? JSON.parse(seed.textContent) : null;
+    const authenticated = data?.authenticated;
+    let timer = 0, pending = null, failed = false, queued = false;
+    const listeners = new Set();
+
+    function render() {
+      if (!data) return;
+      const selected = username ? new URLSearchParams(location.search).get("device") : "";
+      const people = data.people.filter(person => !scope || (scope === "members" ? !person.shared : person.shared));
+      const devices = people.flatMap(person => person.devices
+        .filter(device => !selected || device.id === selected).map(device => ({ person, device })));
+      const active = devices.filter(({ device }) => device.state === "active" && device.last);
+      const stale = failed || now() - data.now > LIVE_POLL * 3;
+      host.classList.toggle("is-stale", stale);
+      count.textContent = stale ? "等待更新" : `${active.length} 台使用中`;
+      note.textContent = stale ? "更新暂时中断，显示上次上报 · 10 秒后重试"
+        : realtime?.state === "connected" ? "实时更新 · 每 10 秒定时校验"
+        : realtime?.state === "reconnecting" ? "实时连接恢复中 · 每 10 秒定时刷新"
+        : "每 10 秒定时刷新 · 随客户端上报更新";
+      const cards = active.map(({ person, device }) => {
+        const app = device.last;
+        const owner = username ? device.name : `${person.username} · ${device.name}`;
+        const updated = `上报于 ${when(device.last_seen)} · ${ago(device.last_seen)}`;
+        return h("li", null,
+          h("a", { class: "live-app", href: `/people/${encodeURIComponent(person.username)}?device=${encodeURIComponent(device.id)}`,
+            "data-key": `live:${device.id}`, "aria-label": `${owner}，${stale ? "上次上报" : "正在使用"} ${app.app}，${updated}` },
+            h("div", { class: "live-app-top" },
+              h("span", { class: "live-app-name" }, swatch(app.color), app.app),
+              h("span", { class: "live-badge", text: stale ? "上次上报" : "使用中" })),
+            h("span", { class: "live-device", text: owner, title: owner }),
+            h("span", { class: "live-updated", text: updated, title: `${app.process} · 最近使用 ${when(app.until)}` })));
+      });
+      if (!cards.length) {
+        const labels = { idle: "空闲", asleep: "休眠", off: "已关机", offline: "离线" };
+        const states = Object.entries(labels).map(([state, label]) => {
+          const total = devices.filter(({ device }) => device.state === state).length;
+          return total ? `${total} 台${label}` : "";
+        }).filter(Boolean).join(" · ");
+        cards.push(h("li", { class: "live-empty" },
+          h("b", { text: stale ? "等待状态更新" : devices.length ? "当前没有正在使用的应用" : "等待客户端上报" }),
+          h("span", { text: stale ? "连接恢复后会自动更新。" : states || "设备开始记录并上传后，当前前台应用会显示在这里。" })));
+      }
+      list.replaceChildren(...cards);
+    }
+
+    async function poll() {
+      clearTimeout(timer);
+      if (doc.hidden) return;
+      if (pending) { queued = true; return; }
+      pending = new AbortController();
+      const timeout = setTimeout(() => pending?.abort(), LIVE_POLL * 1000);
+      try {
+        const query = username ? `?username=${encodeURIComponent(username)}` : "";
+        const next = await getJSON(`/api/web/live${query}`, { signal: pending.signal });
+        if (authenticated != null && next.authenticated !== authenticated) {
+          host.replaceChildren();
+          location.reload();
+          return;
+        }
+        sync(next.now);
+        data = next;
+        failed = false;
+        keepFocus(render);
+        listeners.forEach(listener => listener(next));
+      } catch (error) {
+        failed = true;
+        if (error.status === 404) { data = null; list.replaceChildren(); }
+        if (data) keepFocus(render);
+        else {
+          host.classList.add("is-stale");
+          count.textContent = "等待更新";
+          note.textContent = "暂时无法读取状态 · 10 秒后重试";
+        }
+      } finally {
+        clearTimeout(timeout);
+        pending = null;
+      }
+      if (queued) { queued = false; queueMicrotask(poll); return; }
+      timer = setTimeout(poll, LIVE_POLL * 1000);
+    }
+
+    if (data) { sync(data.now); render(); timer = setTimeout(poll, LIVE_POLL * 1000); }
+    else poll();
+    doc.addEventListener("visibilitychange", () => {
+      clearTimeout(timer);
+      if (doc.hidden) pending?.abort();
+      else poll();
+    });
+    realtime?.subscribe(areas => { if (areas.includes("live") || areas.includes("access")) poll(); });
+    realtime?.onState(() => { if (data) keepFocus(render); });
+    return { render, subscribe: listener => listeners.add(listener) };
   }
 
   // ——— The timetable: lanes on one day, a needle for now, a line to scrub through time ———
@@ -366,23 +473,37 @@
       const bar = Math.max(10, Math.round(height * .42));
       const top = mid - bar / 2 + .5;
       if (lane.runs) {
-        parts.push(s("path", { class: "runs", d: barsPath(lane.runs.filter(run => !run[3]), x, top, bar) }));
-        const live = lane.runs.filter(run => run[3]);
-        if (live.length) parts.push(s("path", { class: "live", d: barsPath(live, x, top, bar) }));
+        const groups = new Map();
+        for (const run of lane.runs) {
+          const color = appColor(lane.colors, run[2]);
+          if (!groups.has(color)) groups.set(color, []);
+          groups.get(color).push(run);
+        }
+        for (const [color, runs] of groups) {
+          parts.push(s("path", { class: "runs app-color", "data-color": color, d: barsPath(runs, x, top, bar) }));
+        }
         if (this.highlight != null) {
-          parts.push(s("path", { class: "hl", d: barsPath(lane.runs.filter(run => run[2] === this.highlight), x, top, bar) }));
+          parts.push(s("path", { class: "hl app-color", "data-color": appColor(lane.colors, this.highlight),
+            d: barsPath(lane.runs.filter(run => run[2] === this.highlight), x, top, bar) }));
         }
       }
       if (lane.bins) {
-        // Shade says how much of each quarter hour was used: one ink, four steps.
-        const levels = [[], [], [], []];
-        for (const [t, seconds] of lane.bins) levels[clamp(Math.ceil(seconds / lane.binSize * 4), 1, 4) - 1].push([t, t + lane.binSize]);
-        levels.forEach((spans, index) => {
-          if (spans.length) parts.push(s("path", { class: "bins", "fill-opacity": (index + 1) / 4, d: barsPath(spans, x, top - 3, bar + 6) }));
-        });
+        // Colour identifies the most-used program in a bin; four shades show occupied time.
+        const groups = new Map();
+        for (const [t, seconds, app] of lane.bins) {
+          const level = clamp(Math.ceil(seconds / lane.binSize * 4), 1, 4);
+          const color = appColor(lane.colors, app), key = `${color}:${level}`;
+          if (!groups.has(key)) groups.set(key, { color, level, spans: [] });
+          groups.get(key).spans.push([t, t + lane.binSize]);
+        }
+        for (const { color, level, spans } of groups.values()) {
+          parts.push(s("path", { class: "bins app-color", "data-color": color,
+            "fill-opacity": level / 4, d: barsPath(spans, x, top - 3, bar + 6) }));
+        }
         if (this.highlight != null) {
           const hot = lane.bins.filter(bin => bin[2] === this.highlight).map(bin => [bin[0], bin[0] + lane.binSize]);
-          parts.push(s("path", { class: "hl", d: barsPath(hot, x, top - 3, bar + 6) }));
+          parts.push(s("path", { class: "hl app-color", "data-color": appColor(lane.colors, this.highlight),
+            d: barsPath(hot, x, top - 3, bar + 6) }));
         }
       }
       lane.svg.replaceChildren(...parts);
@@ -476,6 +597,7 @@
         const reading = lane.read ? lane.read(lane.from + frac * (lane.to - lane.from)) : null;
         lane.dot.classList.toggle("is-on", !!(reading && reading.on));
         lane.scrubApp.textContent = reading ? reading.app : "";
+        if (reading && reading.on && reading.color) lane.scrubApp.prepend(swatch(reading.color));
         lane.scrubApp.classList.toggle("is-none", !(reading && reading.on));
         lane.scrubSub.textContent = reading ? reading.sub || "" : "";
       }
@@ -529,7 +651,8 @@
     const run = findRun(lane.runs, t);
     if (run) {
       const [name, process] = apps[run[2]] || ["?", ""];
-      return { app: name, sub: `${hm(run[0])}–${run[3] ? "现在" : hm(run[1])} · ${process}`, on: true };
+      return { app: name, sub: `${hm(run[0])}–${run[3] ? "现在" : hm(run[1])} · ${process}`,
+        color: appColor(lane.colors, run[2]), on: true };
     }
     let mark = null;
     for (const item of lane.marks || []) { if (item[0] <= t) mark = item; else break; }
@@ -540,10 +663,11 @@
     return { app: "未使用", sub: "", on: false };
   }
   /** Runs arrive as offsets from a base; the last one keeps growing while its device is in use. */
-  function liveRuns(device, offsets, base, limit) {
+  function liveRuns(device, offsets, base, limit, apps) {
     const runs = offsets.map(([start, end, app]) => [base + start, base + end, app, false]);
     const last = runs[runs.length - 1];
-    if (device.state === "active" && last && device.last && last[1] >= device.last.until - 2) {
+    if (device.state === "active" && last && device.last && last[1] >= device.last.until - 2 &&
+        apps[last[2]]?.[1]?.toLowerCase() === device.last.process.toLowerCase()) {
       last[3] = true;
       last[1] = Math.max(last[1], Math.min(now(), limit));
     }
@@ -551,11 +675,13 @@
   }
 
   // ——— Board ———
-  function initBoard() {
+  function initBoard(liveApps) {
     const host = doc.querySelector("[data-board]");
     const seed = doc.getElementById("board-data");
     if (!host || !seed) return;
     let data = JSON.parse(seed.textContent);
+    const authenticated = data.authenticated;
+    const memberScope = host.dataset.boardScope === "members";
     sync(data.now);
     const status = doc.querySelector("[data-board-status]");
     const figures = Object.fromEntries([...doc.querySelectorAll("[data-fig]")].map(node => [node.dataset.fig, node]));
@@ -564,21 +690,39 @@
       bodyLabel: "今日时刻表。按左右方向键，查看某个时刻每台设备在用什么。",
     });
     const heading = doc.title;
-    let first = true, timer = 0;
+    let first = true, timer = 0, pending = false, queued = false, latestLive = null;
+
+    function mergeLive(next) {
+      if (!next || next.now < data.now) return;
+      const old = new Map(data.people.flatMap(person => person.devices.map(device => [device.id, device])));
+      data.people = next.people.map(person => ({ ...person, devices: person.devices.map(device => ({
+        ...device, runs: old.get(device.id)?.runs || [], marks: old.get(device.id)?.marks || [],
+      })) }));
+      data.now = next.now;
+    }
 
     function render() {
       const t = now(), from = midnight(t), to = midnight(t, 1);
       if (first) enter(host);
       table.frame(from, to, false);
-      let online = 0, devices = 0, mine = 0;
+      let online = 0, devices = 0, usage = 0;
       const busy = [];
-      for (const person of data.people) {
+      const people = data.people.filter(person => memberScope ? !person.shared : person.shared);
+      if (!people.length) {
+        table.rows.append(h("div", { class: "board-empty" },
+          h("h3", { text: memberScope ? "暂无仅成员可见的设备" : "暂无公开设备" }),
+          h("p", { text: memberScope ? "成员将记录设为不公开后，会在这里显示。已公开的设备可在公开看板查看。"
+            : "成员公开记录后，设备使用时间就会显示在这里。未公开记录需登录后查看。" }),
+          h("a", { class: "btn is-small", href: memberScope ? "/" : authenticated ? "/settings#sharing" : "/login?next=members",
+            text: memberScope ? "查看公开设备" : authenticated ? "管理我的公开设置" : "登录查看成员记录" })));
+      }
+      for (const person of people) {
         const lanes = person.devices.map(device => {
-          const runs = liveRuns(device, device.runs, data.base, to);
+          const runs = liveRuns(device, device.runs, data.base, to, data.apps);
           return { device, runs, marks: device.marks.map(([offset, reason]) => [data.base + offset, reason]), today: overlap(runs, from, t) };
         });
         const total = lanes.reduce((sum, lane) => sum + lane.today, 0);
-        if (person.self) mine = total;
+        usage += total;
         if (person.devices.some(device => device.state === "active")) busy.push(person.username);
         const group = table.group({
           label: h("div", { class: "tt-person" },
@@ -603,9 +747,9 @@
               href: `/people/${encodeURIComponent(person.username)}?device=${encodeURIComponent(device.id)}` }),
             h("div", { class: "lane-state" }, h("span", { text: stateText(device) }), battery(device.battery)));
           const aside = !device.last ? [h("span", { class: "aside-app is-none", text: "还没有使用记录" })] : [
-            h("span", { class: `aside-app${active ? "" : " is-none"}`, text: active ? device.last.app : `上次 · ${device.last.app}` }),
+            h("span", { class: `aside-app${active ? "" : " is-none"}` }, swatch(device.last.color), active ? device.last.app : `上次 · ${device.last.app}`),
             h("span", { class: "aside-sub", text: active ? `${device.last.process} · 今日 ${span(lane.today)}` : `今日 ${span(lane.today)} · 最后使用 ${when(device.last.until)}` })];
-          const spec = { label, aside, from, to, runs: lane.runs, marks: lane.marks };
+          const spec = { label, aside, from, to, runs: lane.runs, marks: lane.marks, colors: data.app_colors };
           spec.read = time => readRuns(spec, data.apps, time);
           table.lane(group, spec);
         }
@@ -615,9 +759,8 @@
       figures["online-note"].textContent = devices ? `另有 ${devices - online} 台休眠、关机或离线` : "还没有设备";
       figures.busy.textContent = String(busy.length);
       figures["busy-names"].textContent = busy.length ? busy.join("、") : "此刻没有人在用电脑";
-      figures.mine.replaceChildren(figure(mine));
-      const self = data.people.find(person => person.self);
-      figures["mine-note"].textContent = self && self.devices.length ? `${self.devices.length} 台设备相加` : "接入设备后开始累计";
+      figures.total.replaceChildren(figure(usage));
+      figures["total-note"].textContent = devices ? `${devices} 台${memberScope ? "成员" : "公开"}设备时长相加` : "有使用记录后开始累计";
       // A tab left in the background still tells how many people are at their computers.
       doc.title = busy.length ? `(${busy.length}) ${heading}` : heading;
       if (first) table.intro();
@@ -629,9 +772,19 @@
     async function poll() {
       clearTimeout(timer);
       if (doc.hidden) return;
+      if (pending) { queued = true; return; }
+      pending = true;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
       try {
-        data = await getJSON(`/api/web/board?since=${Math.floor(midnight(now()) - 300)}`);
+        data = await getJSON(`/api/web/board?since=${Math.floor(midnight(now()) - 300)}`, { signal: controller.signal });
+        if (data.authenticated !== authenticated) {
+          host.replaceChildren();
+          location.reload();
+          return;
+        }
         sync(data.now);
+        mergeLive(latestLive);
         keepFocus(render);
         status.textContent = "";
         status.classList.remove("is-failed");
@@ -640,7 +793,11 @@
         status.textContent = `更新失败：${error.message}。${BOARD_POLL} 秒后重试。`;
         status.classList.add("is-failed");
         refresh.fail();
+      } finally {
+        clearTimeout(timeout);
+        pending = false;
       }
+      if (queued) { queued = false; queueMicrotask(poll); return; }
       timer = setTimeout(poll, BOARD_POLL * 1000);
     }
 
@@ -649,13 +806,20 @@
     timer = setTimeout(poll, BOARD_POLL * 1000);
     doc.addEventListener("visibilitychange", () => { if (!doc.hidden) poll(); });
     minuteHooks.push(() => keepFocus(render));
+    liveApps?.subscribe(next => {
+      // Foreground-only reports need no history scan: keep the stored runs and marks.
+      latestLive = next;
+      mergeLive(next);
+      keepFocus(render);
+    });
+    realtime?.subscribe(areas => { if (areas.includes("history") || areas.includes("access")) poll(); });
   }
 
   // ——— Person page ———
   const SPANS = { day: 1, week: 7, month: 30, year: 365 };
   const EVENTS = { startup: ["开机", true], resume: ["唤醒", true], suspend: ["休眠", false], shutdown: ["关机", false] };
 
-  function initPerson() {
+  function initPerson(liveApps) {
     const head = doc.querySelector("[data-person]");
     const body = doc.querySelector("[data-person-body]");
     if (!head || !body) return;
@@ -669,7 +833,13 @@
       records: body.querySelector("[data-records]"), status: body.querySelector("[data-status]"),
     };
     let table = null, payload = null, pinned = null, timer = 0, request = 0, intro = true;
-    let pendingRequest = null, bodyMotion = null, previousState = null;
+    let pendingRequest = null, bodyMotion = null, previousState = null, queued = false, latestLive = null;
+
+    function mergeLive() {
+      if (!payload || !latestLive || latestLive.now < payload.now) return;
+      const owner = latestLive.people.find(person => person.username === username);
+      if (owner) payload.devices = owner.devices;
+    }
     calm.addEventListener("change", () => { if (calm.matches) bodyMotion?.cancel(); });
 
     const readState = () => {
@@ -692,6 +862,7 @@
     }
 
     function controls(state, bounds) {
+      liveApps?.render();
       els.spans.style.setProperty("--seg", Object.keys(SPANS).indexOf(state.span));
       for (const link of els.spans.querySelectorAll("[data-span]")) {
         link.href = href({ span: link.dataset.span });
@@ -776,12 +947,12 @@
       }
       const lanesRuns = [];
       for (const device of shown) {
-        const runs = liveRuns(device, payload.runs[device.id] || [], payload.start, bounds.end);
+        const runs = liveRuns(device, payload.runs[device.id] || [], payload.start, bounds.end, payload.apps);
         lanesRuns.push(runs);
         const events = statusBy[device.id] || [];
         const total = payload.totals[device.id] || 0;
         const spec = {
-          from: bounds.start, to: bounds.end, runs,
+          from: bounds.start, to: bounds.end, runs, colors: payload.app_colors,
           marks: events.filter(event => event[1] !== "periodic").map(([t, reason]) => [t, reason]),
           label: h("div", { class: "lane-label" }, lamp(device.state), h("span", { class: "lane-name", text: device.name }),
             h("div", { class: "lane-state" }, h("span", { text: stateText(device) }))),
@@ -837,7 +1008,7 @@
         const bins = byDay.get(day) || [];
         const total = bins.reduce((sum, bin) => sum + bin[1], 0);
         const spec = {
-          from: day, to: midnight(day, 1), bins, binSize: payload.bin,
+          from: day, to: midnight(day, 1), bins, binSize: payload.bin, colors: payload.app_colors,
           label: h("div", { class: "lane-label is-day" },
             h("a", { class: "lane-name", href: href({ span: "day", date: isoDay(day) }), text: `${md(day)} ${weekday(day)}` }),
             day === today ? h("div", { class: "lane-state" }, h("span", { class: "lane-today", text: "今天" })) : null),
@@ -846,7 +1017,8 @@
         spec.read = t => {
           if (t > now()) return { app: "—", sub: "还没到这个时间", on: false };
           const bin = bins.find(item => t >= item[0] && t < item[0] + payload.bin);
-          return bin ? { app: payload.apps[bin[2]][0], sub: `${hm(bin[0])} 起的 ${Math.round(payload.bin / 60)} 分钟里用了 ${span(bin[1])}`, on: true }
+          return bin ? { app: payload.apps[bin[2]][0], color: appColor(payload.app_colors, bin[2]),
+            sub: `${hm(bin[0])} 起的 ${Math.round(payload.bin / 60)} 分钟里用了 ${span(bin[1])}`, on: true }
             : { app: "未使用", sub: "", on: false };
         };
         table.lane(group, spec);
@@ -918,12 +1090,13 @@
       const total = list.reduce((sum, item) => sum + item[1], 0) + payload.other;
       const items = list.map(([app, seconds], index) => {
         const [name, process] = payload.apps[app];
-        const bar = stagger(h("i"), index);
+        const color = appColor(payload.app_colors, app);
+        const bar = stagger(h("i", { class: "app-color", "data-color": color }), index);
         bar.style.width = `${(seconds / max * 100).toFixed(2)}%`;
         const item = stagger(h("li", { tabindex: "0", role: "button", "aria-pressed": String(pinned === app),
           "data-app": app, "data-key": `app-${app}`, class: pinned === app ? "is-on" : null },
           h("span", { class: "rank-no", text: pad(index + 1) }),
-          h("span", { class: "rank-name" }, h("b", { text: name }), h("small", { text: process })),
+          h("span", { class: "rank-name" }, h("b", null, swatch(color), name), h("small", { text: process })),
           h("span", { class: "rank-val" }, span(seconds), h("small", { text: `${total ? Math.round(seconds / total * 100) : 0}%` })),
           h("span", { class: "rank-bar", "aria-hidden": "true" }, bar)), Math.min(index, 12));
         item.hidden = index >= 12;
@@ -950,7 +1123,7 @@
       listNode.addEventListener("click", toggle);
       listNode.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(event); } });
       const parts = [h("div", { class: "block-head" }, h("h2", { class: "label" }, "应用", h("small", { text: "Apps" })),
-        h("p", { class: "block-note", text: table ? "指向或点选一个应用，它在时刻表里标红" : `共 ${list.length} 个应用` }))];
+        h("p", { class: "block-note", text: table ? "颜色对应程序，指向或点选可突出显示" : `共 ${list.length} 个应用` }))];
       parts.push(list.length ? listNode : h("p", { class: "empty", text: "这段时间没有使用记录。" }));
       if (list.length > 12) {
         parts.push(h("button", { class: "btn is-small more", type: "button", onclick: event => {
@@ -1049,7 +1222,7 @@
         const start = payload.start + a, end = payload.start + b;
         return h("tr", null,
           h("td", { class: "when" }, state.span === "day" ? null : h("small", { text: md(start) }), `${hm(start)}–${hm(end)}`),
-          h("td", null, h("b", { text: name }), h("small", { text: process })),
+          h("td", null, h("b", null, swatch(appColor(payload.app_colors, app)), name), h("small", { text: process })),
           h("td", { text: names[device] || "已删除的设备" }),
           h("td", { class: "num", text: span(end - start) }));
       });
@@ -1126,10 +1299,14 @@
     }
 
     async function load(quiet) {
-      if (quiet && body.getAttribute("aria-busy") === "true") return;
+      if (quiet && doc.hidden) return;
+      if (quiet && body.getAttribute("aria-busy") === "true") { queued = true; return; }
       clearTimeout(timer);
       pendingRequest?.abort();
       pendingRequest = new AbortController();
+      const controller = pendingRequest;
+      let timedOut = false;
+      const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 15000);
       const state = readState(), bounds = range(state), ticket = ++request, every = PERSON_POLL[state.span];
       const hadPayload = !!payload;
       const order = Object.keys(SPANS);
@@ -1148,10 +1325,11 @@
       try {
         const query = new URLSearchParams({ start: String(bounds.start), end: String(bounds.end) });
         if (state.device) query.set("device", state.device);
-        const next = await getJSON(`/api/web/people/${encodeURIComponent(username)}?${query}`, { signal: pendingRequest.signal });
+        const next = await getJSON(`/api/web/people/${encodeURIComponent(username)}?${query}`, { signal: controller.signal });
         if (ticket !== request) return;
         sync(next.now);
         payload = next;
+        mergeLive();
         keepFocus(() => render(state, bounds));
         if (!quiet && hadPayload && !calm.matches && body.animate) {
           body.classList.remove("is-loading", "is-entering");
@@ -1162,20 +1340,23 @@
         }
         if (bounds.end > now()) refresh.run(every);
       } catch (error) {
-        if (ticket !== request || error.name === "AbortError") return;
+        if (ticket !== request || (error.name === "AbortError" && !timedOut)) return;
         if (!quiet) {
           for (const part of [els.stats, els.ranking, els.columns, els.records, els.status]) part.replaceChildren();
         }
-        els.view.replaceChildren(h("p", { class: "notice is-error" }, h("b", { text: "未能载入" }), h("span", { text: error.message })));
+        els.view.replaceChildren(h("p", { class: "notice is-error" }, h("b", { text: "未能载入" }),
+          h("span", { text: timedOut ? "读取超时，将自动重试。" : error.message })));
         table = null;
         refresh.fail();
       } finally {
+        clearTimeout(timeout);
         clearTimeout(loading);
         if (ticket === request) {
           body.classList.remove("is-loading");
           body.setAttribute("aria-busy", "false");
         }
       }
+      if (queued && !doc.hidden) { queued = false; queueMicrotask(() => load(true)); return; }
       if (bounds.end > now()) timer = setTimeout(() => load(true), every * 1000);
     }
 
@@ -1196,6 +1377,19 @@
     addEventListener("popstate", () => load(false));
     doc.addEventListener("visibilitychange", () => { if (!doc.hidden && payload && payload.end > now()) load(true); });
     minuteHooks.push(() => { if (table) table.needle(); });
+    liveApps?.subscribe(next => {
+      latestLive = next;
+      mergeLive();
+      if (payload && payload.end > now() && body.getAttribute("aria-busy") !== "true") {
+        const state = readState();
+        keepFocus(() => render(state, range(state)));
+      }
+    });
+    realtime?.subscribe(areas => {
+      const state = readState();
+      if (areas.includes("access") || areas.includes("metadata") ||
+          (areas.includes("history") && state.span === "day" && range(state).end > now())) load(true);
+    });
     load(false);
   }
 
@@ -1249,6 +1443,11 @@
   }
 
   function start() {
+    const liveHost = doc.querySelector("[data-live-apps]");
+    if (liveHost && window.FocusRealtime) {
+      const username = liveHost.dataset.livePerson;
+      realtime = new window.FocusRealtime(`/api/web/events${username ? `?username=${encodeURIComponent(username)}` : ""}`);
+    }
     refresh.line = doc.querySelector("[data-refresh-line]");
     mastHeight();
     navigationIndicator();
@@ -1256,9 +1455,11 @@
     connectHints();
     copyToken();
     startClocks();
-    initBoard();
-    initPerson();
+    const liveApps = initLiveApps();
+    initBoard(liveApps);
+    initPerson(liveApps);
     minuteHooks.push(localTimes);
+    realtime?.start();
   }
   if (doc.readyState === "loading") doc.addEventListener("DOMContentLoaded", start);
   else start();
