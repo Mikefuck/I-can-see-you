@@ -30,6 +30,7 @@ from .app_colors import PALETTE, default_color
 from .ambient import AmbientBackground
 from .motion import MotionButton as QPushButton, MotionCheckBox as QCheckBox, MotionComboBox as QComboBox, MotionValue, PageStack
 from .network import Uploader, check_connection
+from .music import MusicReader
 from .management_ui import ManagementPanel
 from .process_picker import ProcessPicker
 from .store import PENDING, SENT
@@ -509,6 +510,7 @@ class MainWindow(QMainWindow):
         self.show_page(self.LEDGER if config.configured else self.SETTINGS)
         self.uploader = Uploader(store, config)
         self.uploader.start()
+        self.music_reader = MusicReader(self.uploader.observe_music)
         try:
             self.system_events = SystemEventWindow(self.handle_system_event)
         except Exception:
@@ -719,6 +721,9 @@ class MainWindow(QMainWindow):
         self.upload_status = QLabel("等待配置")
         self.cache_status = QLabel("0 条")
         self.battery_status = QLabel("—")
+        self.music_status = QLabel("暂无可读取的音乐播放信息")
+        self.music_status.setWordWrap(True)
+        self.music_status.setObjectName("meta")
         readouts = QGridLayout()
         readouts.setHorizontalSpacing(GUTTER)
         readouts.setVerticalSpacing(4)
@@ -736,6 +741,9 @@ class MainWindow(QMainWindow):
             stack.addStretch()
             readouts.addLayout(stack, 1, column)
         content.addLayout(readouts)
+        content.addSpacing(8)
+        content.addWidget(self._label("caption", "当前音乐"))
+        content.addWidget(self.music_status)
         layout.addWidget(section)
 
         section, content, aside = self._section("最近记录", "Recent")
@@ -947,6 +955,8 @@ class MainWindow(QMainWindow):
         self.interval.setSuffix(" 秒")
         self.app_change_upload = QCheckBox("前台应用变化时立即上传")
         self.app_change_upload.setToolTip("切换前台应用、进入或离开空闲 / 锁屏状态时，在后台立即上传。定时上传仍然保留。")
+        self.music_sync = QCheckBox("同步正在播放的音乐到网页")
+        self.music_sync.setToolTip("读取系统媒体会话中的歌名、歌手和播放器；不录音。播放器需开启系统媒体控制。切歌和暂停会立即尝试上传。")
         self.battery_interval = QSpinBox()
         self.battery_interval.setRange(30, 3600)
         self.battery_interval.setSuffix(" 秒")
@@ -956,6 +966,7 @@ class MainWindow(QMainWindow):
             grid.addWidget(self._label("caption", caption), 0, index * 2, 1, 2)
             grid.addWidget(spin, 1, index * 2, 1, 2)
         grid.addWidget(self.app_change_upload, 2, 0, 1, 6)
+        grid.addWidget(self.music_sync, 3, 0, 1, 6)
         self.startup = QCheckBox("登录 Windows 后自动启动")
         self.silent = QCheckBox("静默启动（直接进入系统托盘）")
         self.silent.setToolTip("启动时不弹出主窗口，只显示托盘图标。再次运行程序或单击托盘图标可打开主窗口。")
@@ -979,7 +990,7 @@ class MainWindow(QMainWindow):
             for box in boxes:
                 column.addWidget(box)
             column.addStretch()
-            grid.addLayout(column, 3, index * 3, 1, 3)
+            grid.addLayout(column, 4, index * 3, 1, 3)
         layout.addLayout(grid)
         layout.addWidget(self._label("hint", "每秒采样前台应用。锁屏、睡眠及空闲时暂停计时；电源事件会先保存本地状态，再限时尝试上传。"
                                              "关闭窗口后继续在托盘运行。"))
@@ -1032,7 +1043,7 @@ class MainWindow(QMainWindow):
 
     def _scope_section(self):
         frame, layout, _ = self._section("数据范围", "Data")
-        layout.addWidget(self._label("hint", "采集范围：应用名称、进程名、使用时长，以及设置允许的电池和系统状态。"
+        layout.addWidget(self._label("hint", "采集范围：应用名称、进程名、使用时长，以及设置允许的电池、系统状态和音乐播放信息（歌名、歌手、专辑、播放器）。音乐信息只同步当前状态，不录音。"
                                              "不采集窗口标题、截图、键盘输入或文件内容。密钥使用 Windows 账户加密存储。"))
         return frame
 
@@ -1075,6 +1086,7 @@ class MainWindow(QMainWindow):
         self.idle.setValue(config.idle_seconds)
         self.interval.setValue(config.upload_seconds)
         self.app_change_upload.setChecked(config.upload_on_app_change)
+        self.music_sync.setChecked(config.music_enabled)
         self.battery.setChecked(config.battery_enabled)
         self.battery_interval.setValue(config.battery_seconds)
         self.battery_interval.setEnabled(config.battery_enabled)
@@ -1096,7 +1108,7 @@ class MainWindow(QMainWindow):
         for spin in (self.port, self.fallback_port, self.idle, self.interval, self.battery_interval):
             spin.valueChanged.connect(self.mark_dirty)
         for box in (self.startup, self.silent, self.battery, self.shutdown_upload, self.suspend_upload,
-                    self.app_change_upload):
+                    self.app_change_upload, self.music_sync):
             box.clicked.connect(self.mark_dirty)
         self.aliases.itemChanged.connect(self.program_item_changed)
 
@@ -1290,6 +1302,7 @@ class MainWindow(QMainWindow):
             startup=self.startup.isChecked(), silent_start=self.silent.isChecked(),
             idle_seconds=self.idle.value(), upload_seconds=self.interval.value(),
             upload_on_app_change=self.app_change_upload.isChecked(),
+            music_enabled=self.music_sync.isChecked(),
             battery_enabled=self.battery.isChecked(), battery_seconds=self.battery_interval.value(),
             upload_on_shutdown=self.shutdown_upload.isChecked(), upload_on_suspend=self.suspend_upload.isChecked(),
             app_aliases=self.collect_aliases(), app_colors=self.collect_colors(), device_ids=device_ids)
@@ -1441,6 +1454,7 @@ class MainWindow(QMainWindow):
         self.save_open_segment()
         self.uploader.observe_foreground(None, time.time())
         self.running = False
+        self.music_reader.set_enabled(False)
         self.toggle.setText("开始采集")
         self.set_state("stopped", "采集已暂停")
         self.show_current(None, "—")
@@ -1457,6 +1471,11 @@ class MainWindow(QMainWindow):
         try:
             if self.suspended and now - self.suspended_at > 15:
                 self.suspended = False  # running again even if the resume notification was missed
+            music_enabled = self.running and self.config.music_enabled and not self.suspended and not self.shutdown_saved
+            self.music_reader.set_enabled(music_enabled)
+            if not music_enabled:
+                self.uploader.observe_music(None, time.time())
+            self.music_status.setText(self.music_reader.status)
             if self.running and now >= self.retry_sampling_at:
                 app, state = self.reader.sample(self.config.idle_seconds)
                 if app:
@@ -1619,6 +1638,7 @@ class MainWindow(QMainWindow):
         # background. WM_ENDSESSION then waits briefly for it, because the process ends afterwards.
         if not self.shutdown_saved:
             self.shutdown_saved = True
+            self.music_reader.set_enabled(False)
             self.save_open_segment()
             self.uploader.observe_foreground(None, time.time(), trigger=False)
             if self.config.upload_on_shutdown:
@@ -1633,6 +1653,7 @@ class MainWindow(QMainWindow):
         self.running = False
         self.timer.stop()
         self.uploader.stop()
+        self.music_reader.stop()
         self.tray.hide()
         app = QApplication.instance()
         if app is not None:
@@ -1642,6 +1663,7 @@ class MainWindow(QMainWindow):
         if self.suspended:
             return  # the broadcast and the explicit subscription can both deliver it
         self.suspended, self.suspended_at = True, time.monotonic()
+        self.music_reader.set_enabled(False)
         self.save_open_segment()
         self.uploader.observe_foreground(None, time.time(), trigger=False)
         if self.config.upload_on_suspend:
@@ -1742,6 +1764,7 @@ class MainWindow(QMainWindow):
             logging.exception("Failed to flush final segment")
         self.timer.stop()
         self.uploader.stop()
+        self.music_reader.stop()
         self.release_system_events()
         self.tray.hide()
         QApplication.instance().quit()

@@ -56,6 +56,9 @@ class Upload:
     def observe_foreground(self, app, wall, *, trigger=True):
         pass
 
+    def observe_music(self, track, wall):
+        pass
+
     def flush(self, timeout=3.0):
         self.calls.append(("flush", timeout))
         return True
@@ -77,6 +80,20 @@ class NoSystemEvents:
         pass
 
 
+class NoMusic:
+    status = "暂无可读取的音乐播放信息"
+
+    def __init__(self, observe):
+        self.observe = observe
+        self.enabled = False
+
+    def set_enabled(self, enabled):
+        self.enabled = enabled
+
+    def stop(self):
+        pass
+
+
 @pytest.fixture
 def make_window(tmp_path, monkeypatch):
     app = QApplication.instance() or QApplication([])
@@ -84,6 +101,7 @@ def make_window(tmp_path, monkeypatch):
     monkeypatch.setattr(gui, "Uploader", Upload)
     monkeypatch.setattr(gui, "BatteryReader", Battery)
     monkeypatch.setattr(gui, "SystemEventWindow", NoSystemEvents)
+    monkeypatch.setattr(gui, "MusicReader", NoMusic)
     monkeypatch.setattr(gui, "startup_enabled", lambda: False)
     startup_calls = []
     monkeypatch.setattr(gui, "set_startup", startup_calls.append)
@@ -158,6 +176,42 @@ def send_wheel(target, delta):
         QPointF(point), QPointF(target.mapToGlobal(point)), QPoint(), QPoint(0, delta),
         Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
         Qt.ScrollPhase.NoScrollPhase, False))
+
+
+@pytest.mark.parametrize("size", [(860, 560), (1080, 820), (1440, 900)])
+@pytest.mark.parametrize("startup_notice", [False, True])
+def test_music_sync_has_its_own_clickable_row(make_window, size, startup_notice):
+    app, build = make_window
+    window = build(startup=startup_notice)
+    window.resize(*size)
+    window.show()
+    window.timer.stop()
+    window.pages.setCurrentIndex(window.SETTINGS)
+    window.pages.finish_transition()
+    app.processEvents()
+    window.settings_scroll.ensureWidgetVisible(window.music_sync)
+    app.processEvents()
+
+    body = window.settings_scroll.widget()
+
+    def bounds(control):
+        return QRect(control.mapTo(body, QPoint()), control.size())
+
+    music = bounds(window.music_sync)
+    assert bounds(window.app_change_upload).bottom() < music.top()
+    others = (window.startup, window.silent, window.battery,
+              window.shutdown_upload, window.suspend_upload)
+    for control in others:
+        assert music.bottom() < bounds(control).top()
+
+    # A real click must reach the music checkbox without toggling a nearby setting.
+    point = QPoint(10, window.music_sync.height() // 2)
+    assert window.childAt(window.music_sync.mapTo(window, point)) is window.music_sync
+    previous = window.music_sync.isChecked()
+    other_states = [control.isChecked() for control in others]
+    QTest.mouseClick(window.music_sync, Qt.MouseButton.LeftButton, pos=point)
+    assert window.music_sync.isChecked() != previous
+    assert [control.isChecked() for control in others] == other_states
 
 
 @pytest.mark.parametrize("focused", [False, True])

@@ -25,6 +25,7 @@ public final class CollectorService extends Service {
     private final Handler main = new Handler(Looper.getMainLooper());
     private Agent agent;
     private boolean registered;
+    private String lastNotification = "";
     private final BroadcastReceiver power = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             if (Intent.ACTION_SHUTDOWN.equals(intent.getAction())) {
@@ -70,7 +71,7 @@ public final class CollectorService extends Service {
         if (ACTION_PAUSE.equals(action)) agent.toggleTracking();
         if (ACTION_UPLOAD.equals(action)) agent.uploader.request(true, true);
         if (ACTION_STOP.equals(action)) agent.stop();
-        refreshNotification(); return START_STICKY;
+        refreshNotification(); agent.requestTick(0); return START_STICKY;
     }
     private PendingIntent action(String action, int code) { return PendingIntent.getService(this, code, new Intent(this, CollectorService.class).setAction(action), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE); }
     private Notification notification() {
@@ -84,7 +85,16 @@ public final class CollectorService extends Service {
             .addAction(new Notification.Action.Builder(null, "上传", action(ACTION_UPLOAD, 2)).build())
             .addAction(new Notification.Action.Builder(null, "停止", action(ACTION_STOP, 3)).build()).build();
     }
-    void refreshNotification() { main.post(() -> { if (agent.service == this) getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification()); }); }
+    void refreshNotification() {
+        main.post(() -> {
+            if (agent.service != this) return;
+            if (!KeepAlive.notifications(this)) { lastNotification = ""; return; }
+            Notification notification = notification();
+            String content = notification.extras.getCharSequence(Notification.EXTRA_TITLE) + "|" + notification.extras.getCharSequence(Notification.EXTRA_TEXT);
+            if (content.equals(lastNotification)) return;
+            getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification()); lastNotification = content;
+        });
+    }
     void stopAfterUpload() { agent.uploader.whenIdle(() -> main.post(this::stopSelf)); main.postDelayed(this::stopSelf, 12_000); }
     @Override public void onTaskRemoved(Intent rootIntent) { if (agent.settings.wanted()) KeepAlive.recoverLater(this); super.onTaskRemoved(rootIntent); }
     @Override public void onDestroy() {

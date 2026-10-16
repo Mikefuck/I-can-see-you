@@ -1,11 +1,8 @@
 package com.focusledger.android;
 
-import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
-import android.content.pm.PackageManager;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -100,6 +97,7 @@ public final class MainActivity extends Activity {
         device.setMaxLines(1); device.setEllipsize(android.text.TextUtils.TruncateAt.END); device.setPadding(0, ui.dp(10), 0, ui.dp(18)); hero.addView(device);
         TextView current = dynamic(hero, "current", 14, true); current.setBackground(ui.shape(ui.surface, 0, 14));
         current.setPadding(ui.dp(12), ui.dp(12), ui.dp(12), ui.dp(12));
+        dynamic(hero, "music", 13, false).setPadding(ui.dp(2), ui.dp(8), 0, 0);
         TextView pending = dynamic(hero, "pending", 12, false); pending.setTextColor(ui.muted); pending.setPadding(ui.dp(2), ui.dp(10), 0, 0);
         trackingControl = ui.primary("开始采集", v -> control());
         Button upload = ui.button("立即上传", v -> upload()); ui.icon(upload, Icons.UPLOAD); ui.actions(hero, trackingControl, upload);
@@ -110,7 +108,7 @@ public final class MainActivity extends Activity {
         Button board = ui.button("打开服务端看板", v -> openBoard(null)); ui.trailingIcon(board, Icons.ARROW); sync.addView(board);
         LinearLayout ranks = ui.card(body); ui.title(ranks, "今天用在了哪里"); rankRows(ranks, todayStart(), System.currentTimeMillis(), 6);
         LinearLayout privacy = ui.card(body); privacy.setBackground(ui.shape(ui.surface, 0, 22)); ui.title(privacy, "只记录使用情况");
-        ui.note(privacy, "仅记录前台应用名称、包名、起止时间和设备电量。不读取聊天内容、窗口文字、截图、键盘输入或文件内容。锁屏和熄屏停止计时。");
+        ui.note(privacy, "记录前台应用名称、包名、起止时间和设备电量。音乐同步读取系统提供的歌名、歌手、专辑与播放器，仅展示当前状态。不录音，不读取通知正文、聊天、截图或文件内容。锁屏和熄屏停止应用计时，音乐同步可继续。");
         if (!agent.settings.warning.isEmpty()) ui.note(privacy, agent.settings.warning);
     }
     private void history() {
@@ -179,15 +177,20 @@ public final class MainActivity extends Activity {
             }
             JSONObject app = agent.foreground(c).optJSONObject("app");
             put("current", app == null ? "当前：锁屏、空闲或未采集" : "当前：" + c.displayName(app.optString("process_name"), app.optString("app_name")));
+            JSONObject track = agent.music.snapshot().optJSONObject("track");
+            put("music", !c.musicEnabled ? "音乐同步已关闭" : !MusicReader.permitted(this) ? "音乐识别：请在连接页开启通知访问权限" : !agent.settings.tracking() ? "音乐同步已暂停" : track == null ? "暂无可读取的音乐播放信息" : ("paused".equals(track.optString("state")) ? "音乐已暂停 · " : "正在听 · ") + track.optString("title") + (track.optString("artist").isEmpty() ? "" : " · " + track.optString("artist")));
+            put("music_permission", MusicReader.permitted(this) ? "音乐识别的通知访问：已授权" : "音乐识别的通知访问：未授权");
             int pending = agent.store.count(c.scope, false), all = agent.store.count(c.scope, true);
             put("pending", "待上传 " + pending + " 条" + (all > pending ? " · 其他连接 " + (all-pending) + " 条" : ""));
             put("upload", agent.uploader.busy() ? "正在同步记录…" : "最近同步  " + Ui.clock(longValue(agent.store.get(c.scope+":last_upload", "0"))));
             put("endpoint", agent.store.get(c.scope+":last_endpoint", c.primary.isEmpty() ? "连接服务器后自动同步" : c.primary));
             String error = agent.store.get(c.scope+":last_error", ""); if (!agent.captureNote.isEmpty()) error = agent.captureNote + "\n" + error;
+            String musicNote = agent.store.get(c.scope+":music_note", "");
+            if (c.musicEnabled && !musicNote.isEmpty()) error = musicNote + (error.isEmpty() ? "" : "\n" + error);
             put("error", error);
             put("usage_permission", UsageReader.permitted(this) ? "使用情况访问：已授权" : "使用情况访问：未授权");
             put("battery_permission", KeepAlive.batteryExempt(this) ? "系统电池优化：已豁免" : "系统电池优化：仍在限制");
-            put("notifications", KeepAlive.notifications(this) ? "通知：已允许" : "通知：已关闭，建议允许持续记录状态通知");
+            put("notifications", KeepAlive.notifications(this) ? "状态通知：已显示，可在系统设置中关闭" : "状态通知：已关闭，不影响开始采集");
             put("health", "后台服务：" + (agent.service == null ? "未运行" : "运行中") + "\n最近采集：" + Ui.clock(longValue(agent.store.get("last_capture", "0")))
                 + "\n恢复任务：" + (getSystemService(android.app.job.JobScheduler.class).getPendingJob(KeepAlive.PERIODIC_JOB) == null ? "未登记" : "已登记（执行时间由系统决定）")
                 + "\n" + agent.store.get("recovery_note", "") + "\n" + agent.store.get(c.scope+":metadata_note", "") + "\n" + agent.store.get(c.scope+":validation_note", ""));
@@ -203,24 +206,25 @@ public final class MainActivity extends Activity {
             .setPositiveButton("去授权", (d,w) -> KeepAlive.usageSettings(this)).setNegativeButton("取消", null).show(); return; }
         if (agent.service != null && !agent.settings.wanted()) { toast("正在停止服务，请稍后再开始"); return; }
         if (agent.service != null) agent.toggleTracking();
-        else if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 41);
         else agent.begin();
         main.postDelayed(this::render, 500);
     }
-    @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) { super.onRequestPermissionsResult(code, permissions, results); if (code == 41) { agent.begin(); main.postDelayed(this::render, 500); } }
     void upload() {
         if (!agent.settings.get().configured()) { show(2); return; }
         agent.collector.execute(() -> { try { if (agent.settings.tracking()) agent.capture(agent.settings.get(), false); agent.uploader.request(true, true); } catch (Exception e) { toast(Agent.message(e)); } }); toast("正在尝试同步，结果会显示在同步状态中");
     }
     void verifyAndSave(Config candidate, Runnable done) {
+        verifyAndSave(candidate, done, false);
+    }
+    void verifyAndSave(Config candidate, Runnable done, boolean verifyConnection) {
         if (saving) { toast("正在验证并保存，请稍候"); return; } saving = true; toast("正在验证并保存设置…");
         Config old = agent.settings.get();
         boolean connectionChanged = !old.configured() || !old.primary.equals(candidate.primary) || !old.fallback.equals(candidate.fallback) || !old.apiKey.equals(candidate.apiKey) || !old.deviceName.equals(candidate.deviceName);
         io(() -> {
             candidate.validate(); Config bound = candidate;
-            if (connectionChanged) {
+            if (connectionChanged || verifyConnection) {
                 JSONObject checked = agent.transport.check(candidate); bound = agent.settings.bind(candidate, checked);
-                agent.transport.request(bound, "POST", "/api/v1/usage/batches", new JSONObject().put("schema_version", 1).put("device", bound.device()).put("events", new JSONArray()));
+                if (connectionChanged) agent.transport.request(bound, "POST", "/api/v1/usage/batches", new JSONObject().put("schema_version", 1).put("device", bound.device()).put("events", new JSONArray()));
             }
             return bound;
         }, bound -> agent.saveConfig(bound, () -> runOnUiThread(() -> { saving = false; agent.settings.prefs.edit().remove("draft_key").remove("draft_primary").remove("draft_fallback").apply(); toast("设置已保存"); done.run(); }), error -> runOnUiThread(() -> { saving = false; toast(error); })), error -> { saving = false; toast(error); });

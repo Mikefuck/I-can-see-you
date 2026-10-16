@@ -95,11 +95,41 @@ class Foreground(StrictModel):
         return self
 
 
+class MusicTrack(StrictModel):
+    title: str = Field(min_length=1, max_length=300)
+    artist: str = Field(default="", max_length=300)
+    album: str = Field(default="", max_length=300)
+    app_name: str = Field(min_length=1, max_length=200)
+    process_name: str = Field(min_length=1, max_length=200)
+    state: Literal["playing", "paused"]
+
+    @field_validator("title", "artist", "album", "app_name", "process_name")
+    @classmethod
+    def clean_text(cls, value, info):
+        value = value.strip()
+        if info.field_name in {"title", "app_name", "process_name"} and not value:
+            raise ValueError("Music title and player must not be blank")
+        return value
+
+
+class Music(StrictModel):
+    observed_at: datetime
+    track: MusicTrack | None
+
+    @field_validator("observed_at")
+    @classmethod
+    def timezone_required(cls, value):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Timestamp must include a timezone")
+        return value
+
+
 class Batch(StrictModel):
     schema_version: Literal[1] = 1
     device: Device
     events: list[BatchEvent] = Field(max_length=500)
     foreground: Foreground | None = None
+    music: Music | None = None
 
 
 class AppAliases(StrictModel):

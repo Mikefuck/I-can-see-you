@@ -31,6 +31,20 @@ public final class ServerIntegrationProbe {
         transport.request(c,"PUT","/api/v1/agent/app-colors",new JSONObject().put("device",c.device()).put("app_colors",new JSONObject().put("org.example.reader","teal")));
         JSONObject device=transport.request(c,"GET","/api/web/live",null).json().getJSONArray("people").getJSONObject(0).getJSONArray("devices").getJSONObject(0);
         check("阅读器".equals(device.getJSONObject("last").getString("app")),"Live alias"); check("teal".equals(device.getJSONObject("last").getString("color")),"Live color");
+        JSONObject music = new JSONObject().put("observed_at",java.time.Instant.now().toString()).put("track",new JSONObject()
+            .put("title","安卓测试歌曲").put("artist","测试歌手").put("album", "").put("app_name","测试播放器").put("process_name","test.music").put("state","playing"));
+        JSONObject musicBody = new JSONObject().put("schema_version",1).put("device",c.device()).put("events",new JSONArray()).put("music",music);
+        transport.request(c,"POST","/api/v1/usage/batches",musicBody);
+        device=transport.request(c,"GET","/api/web/live",null).json().getJSONArray("people").getJSONObject(0).getJSONArray("devices").getJSONObject(0);
+        check("安卓测试歌曲".equals(device.getJSONObject("music").getString("title")),"Music metadata upload");
+        music.put("observed_at",java.time.Instant.now().toString()).getJSONObject("track").put("state","paused");
+        transport.request(c,"POST","/api/v1/usage/batches",musicBody);
+        device=transport.request(c,"GET","/api/web/live",null).json().getJSONArray("people").getJSONObject(0).getJSONArray("devices").getJSONObject(0);
+        check("paused".equals(device.getJSONObject("music").getString("state")),"Music pause upload");
+        music.put("observed_at",java.time.Instant.now().toString()).put("track",JSONObject.NULL);
+        transport.request(c,"POST","/api/v1/usage/batches",musicBody);
+        device=transport.request(c,"GET","/api/web/live",null).json().getJSONArray("people").getJSONObject(0).getJSONArray("devices").getJSONObject(0);
+        check(device.isNull("music"),"Music clear upload");
         Transport.Reply login=transport.at(c.primary,"POST","/api/v1/management/login",new JSONObject().put("username","android_admin").put("password",fixture.getString("password")),null,null,null,false,8000);
         String cookie="";
         for(Map.Entry<String,List<String>> header:login.headers().entrySet())if(header.getKey()!=null&&header.getKey().equalsIgnoreCase("Set-Cookie"))cookie=header.getValue().get(0).split(";",2)[0];
@@ -43,6 +57,6 @@ public final class ServerIntegrationProbe {
         c.apiKey=newKey.getString("api_key");check(transport.check(c).getLong("account_id")==1,"Rotated key binding");
         transport.request(c,"POST","/api/v1/usage/batches",body);
         transport.at(c.primary,"POST","/api/v1/management/logout",new JSONObject(),null,cookie,csrf,false,8000);
-        System.out.println("Android real-server HTTP integration passed: usage, status, retries, gzip, live state, aliases, colors, management and key rotation.");
+        System.out.println("Android real-server HTTP integration passed: usage, status, retries, gzip, live state, music playing/pause/clear, aliases, colors, management and key rotation.");
     }
 }

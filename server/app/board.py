@@ -5,6 +5,7 @@ day of activity compact. Calendar days are left to the browser, the only side th
 viewer's time zone.
 """
 from collections import defaultdict
+import json
 from .aliases import device_aliases, display_name
 from .app_colors import color_for, device_colors
 
@@ -106,10 +107,18 @@ def device_summary(db, device, now):
         state, since = "active", last["since"]
     else:
         state, since = "idle", last_use
+    music = db.execute("SELECT observed_at,track FROM device_music WHERE device_id=?", (device["id"],)).fetchone()
+    current_music = None
+    if (music and music["track"] and now - last_seen <= ONLINE_SECONDS
+            and now - music["observed_at"] <= ONLINE_SECONDS
+            and music["observed_at"] >= last_seen - ACTIVE_SECONDS):
+        current_music = json.loads(music["track"])
+        current_music["app_name"] = display_name(aliases, current_music["process_name"], current_music["app_name"])
+        current_music["observed_at"] = music["observed_at"]
     return {
         "id": device["id"], "name": device["name"], "platform": device["platform"],
         "version": device["agent_version"], "first_seen": device["first_seen"], "last_seen": last_seen,
-        "state": state, "since": since, "last": last,
+        "state": state, "since": since, "last": last, "music": current_music,
         "battery": None if not battery else {
             "at": battery["occurred_at"], "percent": battery["battery_percent"],
             "charging": None if battery["charging"] is None else bool(battery["charging"]),

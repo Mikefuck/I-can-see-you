@@ -26,6 +26,7 @@ class Config:
     idle_seconds: int = 300
     upload_seconds: int = 30
     upload_on_app_change: bool = False
+    music_enabled: bool = True
     battery_enabled: bool = True
     battery_seconds: int = 300
     upload_on_shutdown: bool = True
@@ -124,6 +125,8 @@ class Config:
             raise ValueError("空闲阈值须为 0–3600 秒，上传间隔须为 10–300 秒")
         if not isinstance(self.upload_on_app_change, bool):
             raise ValueError("前台应用变化上传选项无效")
+        if not isinstance(self.music_enabled, bool):
+            raise ValueError("音乐同步选项无效")
         if not isinstance(self.battery_enabled, bool) or not 30 <= self.battery_seconds <= 3600:
             raise ValueError("电池状态采集间隔须为 30–3600 秒")
         if not isinstance(self.upload_on_shutdown, bool) or not isinstance(self.upload_on_suspend, bool):

@@ -246,6 +246,19 @@
     }
   }
   const lamp = state => h("i", { class: `lamp ${STATES[state] || STATES.offline}`, "aria-hidden": "true" });
+  function currentMusic(device) {
+    return device.music && now() - device.music.observed_at <= 330 && now() - device.last_seen <= 330 ? device.music : null;
+  }
+  function musicLine(device, stale = false) {
+    const track = currentMusic(device);
+    if (!track) return null;
+    const label = stale ? "上次播放" : track.state === "playing" ? "正在听" : "已暂停";
+    const details = [track.artist, track.app_name].filter(Boolean).join(" · ");
+    return h("span", { class: `music-line${track.state === "paused" || stale ? " is-paused" : ""}`,
+      title: [label, track.title, track.artist, track.album, track.app_name].filter(Boolean).join(" · ") },
+      h("span", { class: "music-title", text: `♫ ${label} · ${track.title}` }),
+      details ? h("span", { class: "music-detail", text: details }) : null);
+  }
   function battery(info) {
     if (!info || info.percent == null || now() - info.at > 86400) return null;
     const cell = h("i");
@@ -276,26 +289,30 @@
       const selected = username ? new URLSearchParams(location.search).get("device") : "";
       const people = data.people.filter(person => !scope || (scope === "members" ? !person.shared : person.shared));
       const devices = people.flatMap(person => person.devices
-        .filter(device => !selected || device.id === selected).map(device => ({ person, device })));
+        .filter(device => !selected || device.id === selected).map(device => ({ person, device: { ...device, music: currentMusic(device) } })));
       const active = devices.filter(({ device }) => device.state === "active" && device.last);
+      const playing = devices.filter(({ device }) => device.music?.state === "playing");
       const stale = failed || now() - data.now > LIVE_POLL * 3;
       host.classList.toggle("is-stale", stale);
-      count.textContent = stale ? "等待更新" : `${active.length} 台使用中`;
+      count.textContent = stale ? "等待更新" : `${active.length} 台使用中${playing.length ? ` · ${playing.length} 台播放中` : ""}`;
       note.textContent = stale ? "更新暂时中断，显示上次上报 · 10 秒后重试"
         : realtime?.state === "connected" ? "实时更新 · 每 10 秒定时校验"
         : realtime?.state === "reconnecting" ? "实时连接恢复中 · 每 10 秒定时刷新"
         : "每 10 秒定时刷新 · 随客户端上报更新";
-      const cards = active.map(({ person, device }) => {
-        const app = device.last;
+      const cards = devices.filter(({ device }) => (device.state === "active" && device.last) || device.music).map(({ person, device }) => {
+        const using = device.state === "active" && device.last;
+        const app = using ? device.last : { app: device.music.app_name, process: device.music.process_name, until: device.music.observed_at };
         const owner = username ? device.name : `${person.username} · ${device.name}`;
         const updated = `上报于 ${when(device.last_seen)} · ${ago(device.last_seen)}`;
+        const song = device.music ? `，${stale ? "上次播放" : device.music.state === "playing" ? "正在听" : "音乐已暂停"} ${device.music.title}${device.music.artist ? `，${device.music.artist}` : ""}` : "";
         return h("li", null,
           h("a", { class: "live-app", href: `/people/${encodeURIComponent(person.username)}?device=${encodeURIComponent(device.id)}`,
-            "data-key": `live:${device.id}`, "aria-label": `${owner}，${stale ? "上次上报" : "正在使用"} ${app.app}，${updated}` },
+            "data-key": `live:${device.id}`, "aria-label": `${owner}，${stale ? "上次上报" : using ? "正在使用" : "播放器"} ${app.app}${song}，${updated}` },
             h("div", { class: "live-app-top" },
               h("span", { class: "live-app-name" }, swatch(app.color), app.app),
-              h("span", { class: "live-badge", text: stale ? "上次上报" : "使用中" })),
+              h("span", { class: "live-badge", text: stale ? "上次上报" : using ? "使用中" : device.music.state === "playing" ? "播放中" : "已暂停" })),
             h("span", { class: "live-device", text: owner, title: owner }),
+            musicLine(device, stale),
             h("span", { class: "live-updated", text: updated, title: `${app.process} · 最近使用 ${when(app.until)}` })));
       });
       if (!cards.length) {
@@ -751,6 +768,7 @@
           const aside = !device.last ? [h("span", { class: "aside-app is-none", text: "还没有使用记录" })] : [
             h("span", { class: `aside-app${active ? "" : " is-none"}` }, swatch(device.last.color), active ? device.last.app : `上次 · ${device.last.app}`),
             h("span", { class: "aside-sub", text: active ? `${device.last.process} · 今日 ${span(lane.today)}` : `今日 ${span(lane.today)} · 最后使用 ${when(device.last.until)}` })];
+          aside.push(musicLine(device));
           const spec = { label, aside, from, to, runs: lane.runs, marks: lane.marks, colors: data.app_colors };
           spec.read = time => readRuns(spec, data.apps, time);
           table.lane(group, spec);

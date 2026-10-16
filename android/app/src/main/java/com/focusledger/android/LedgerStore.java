@@ -49,6 +49,7 @@ final class LedgerStore extends SQLiteOpenHelper {
             if (state != null) {
                 ContentValues values = new ContentValues(); values.put("scope", scope); values.put("payload", state.toString());
                 db.insertWithOnConflict("checkpoints", null, values, SQLiteDatabase.CONFLICT_REPLACE);
+                if (state.has("cursor")) put(db, "last_capture", Long.toString(state.getLong("cursor")));
             }
             db.setTransactionSuccessful();
         } catch (Exception e) { throw new IllegalStateException("无法保存本地记录", e); }
@@ -67,6 +68,7 @@ final class LedgerStore extends SQLiteOpenHelper {
         return events;
     }
     synchronized void acknowledge(String scope, JSONArray batch, JSONArray ack) throws Exception {
+        if (batch.length() == 0 || ack.length() == 0) return;
         java.util.Set<String> sent = new java.util.HashSet<>();
         for (int i = 0; i < batch.length(); i++) sent.add(batch.getJSONObject(i).getString("id"));
         SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
@@ -97,8 +99,11 @@ final class LedgerStore extends SQLiteOpenHelper {
         return rows;
     }
     synchronized void put(String key, String value) {
+        put(getWritableDatabase(), key, value);
+    }
+    private void put(SQLiteDatabase db, String key, String value) {
         ContentValues v = new ContentValues(); v.put("key", key); v.put("value", value);
-        getWritableDatabase().insertWithOnConflict("metadata", null, v, SQLiteDatabase.CONFLICT_REPLACE);
+        db.insertWithOnConflict("metadata", null, v, SQLiteDatabase.CONFLICT_REPLACE);
     }
     synchronized String get(String key, String fallback) {
         try (Cursor c = getReadableDatabase().rawQuery("SELECT value FROM metadata WHERE key=?", new String[]{key})) { return c.moveToFirst() ? c.getString(0) : fallback; }

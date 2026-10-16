@@ -46,4 +46,19 @@ public class LedgerStoreTest {
         assertEquals(60d, total("phone", DAY, DAY + 86400000), 0d);
         assertEquals(0d, total("unknown", DAY, DAY + 86400000), 0d);
     }
+    @Test public void captureDiagnosticCommitsAndRollsBackWithCheckpoint() throws Exception {
+        store.commit("phone", new org.json.JSONObject().put("cursor", DAY), List.of(), List.of(), reader);
+        assertEquals(Long.toString(DAY), store.get("last_capture", ""));
+        // Reject the metadata write to simulate a failure midway through the transaction.
+        store.getWritableDatabase().execSQL("CREATE TRIGGER reject_capture BEFORE INSERT ON metadata BEGIN SELECT RAISE(ABORT, 'test failure'); END");
+        try {
+            store.commit("phone", new org.json.JSONObject().put("cursor", DAY + 1000),
+                List.of(new LedgerStore.Slice("reader", DAY, DAY + 1000)), List.of(), reader);
+            fail("Capture transaction should fail");
+        } catch (IllegalStateException expected) {
+            assertEquals(DAY, store.checkpoint("phone").getLong("cursor"));
+            assertEquals(Long.toString(DAY), store.get("last_capture", ""));
+            assertEquals(0, store.count("phone", false));
+        }
+    }
 }

@@ -168,6 +168,8 @@ class Uploader:
         self.compression_state = None
         self.foreground = None
         self.foreground_supported = None
+        self.music = None
+        self.music_supported = None
         self.messages = Queue()
         self.wake = threading.Event()
         self.force_upload = True
@@ -183,6 +185,11 @@ class Uploader:
             if not config.upload_on_app_change or (self.config.destination, self.config.device_id) != (config.destination, config.device_id):
                 self.foreground = None
             self.foreground_supported = None
+            self.music_supported = None
+            if (self.config.destination, self.config.device_id) != (config.destination, config.device_id):
+                self.music = None
+            elif not config.music_enabled:
+                self.music = {"observed_at": datetime.now(timezone.utc).isoformat(), "track": None}
             preferred = (self.config.active_url if self.config.base_urls == config.base_urls and
                          self.config.api_key == config.api_key else config.active_url)
             self.config = replace(config, preferred_endpoint=preferred)
@@ -236,6 +243,14 @@ class Uploader:
                 return False
             time.sleep(0.05)
         return False
+
+    def observe_music(self, track, wall):
+        with self.lock:
+            track = dict(track) if track and self.config.music_enabled else None
+            changed = self.music is None or self.music["track"] != track
+            self.music = {"observed_at": datetime.fromtimestamp(wall, timezone.utc).isoformat(), "track": track}
+        if changed:
+            self.wake.set()
 
     def stop(self):
         self.stop_event.set()
@@ -332,6 +347,7 @@ class Uploader:
                 # configure() replaces the object; keep this snapshot so successful routes survive retries.
                 config = self.config
                 foreground, supported = self.foreground, self.foreground_supported
+                music, music_supported = self.music, self.music_supported
             if retry_wait:
                 self.wake.wait(retry_wait)
                 continue
@@ -350,24 +366,33 @@ class Uploader:
                         # the old name. Event IDs and payloads stay unchanged for deduplication.
                         payload["device"] = {**payload["device"], "name": config.device_name}
                     foreground_warning = ""
+                    music_warning = ""
+                    current_device = payload["device"]["id"] == config.device_id
+                    if current_device and ((config.upload_on_app_change and foreground is not None and supported is None)
+                                           or (music is not None and music_supported is None)):
+                        capabilities = request_json(config, "/api/v1/agent/check")
+                        supported = "foreground" in capabilities.get("features", [])
+                        music_supported = "music" in capabilities.get("features", [])
+                        with self.lock:
+                            if self.config is config:
+                                self.foreground_supported, self.music_supported = supported, music_supported
                     if config.upload_on_app_change and foreground is not None and payload["device"]["id"] == config.device_id:
-                        if supported is None:
-                            capabilities = request_json(config, "/api/v1/agent/check")
-                            supported = "foreground" in capabilities.get("features", [])
-                            with self.lock:
-                                if self.config is config:
-                                    self.foreground_supported = supported
                         if supported:
                             payload["foreground"] = foreground
                         else:
                             foreground_warning = "服务端不支持实时前台状态，请升级服务端"
+                    if current_device and music is not None:
+                        if music_supported:
+                            payload["music"] = music
+                        elif config.music_enabled:
+                            music_warning = "服务端不支持音乐同步，请升级服务端"
                     result = self._request(config, "/api/v1/usage/batches", payload)
                     sent_ids = {event["id"] for event in payload["events"]}
                     acknowledged = result.get("acknowledged_ids")
                     if not isinstance(acknowledged, list) or set(acknowledged) != sent_ids:
                         raise RuntimeError("服务器未完整确认记录，保留缓存等待重试")
                     self.store.acknowledge(config.destination, acknowledged)
-                    warning = " · ".join(filter(None, (foreground_warning, self.sync_aliases(config), self.sync_colors(config))))
+                    warning = " · ".join(filter(None, (foreground_warning, music_warning, self.sync_aliases(config), self.sync_colors(config))))
                     failures = 0
                     with self.lock:
                         self.retry_at = 0.0

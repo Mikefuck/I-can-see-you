@@ -21,6 +21,7 @@ final class Agent {
     final Settings settings;
     final LedgerStore store;
     final UsageReader reader;
+    final MusicReader music;
     final Transport transport;
     final Uploader uploader;
     final Management management;
@@ -31,38 +32,63 @@ final class Agent {
     private ScheduledFuture<?> tickTask;
     private long nextBattery, nextCleanup, nextCapture;
     private String lastForeground, lastPower;
+    private final java.util.concurrent.atomic.AtomicBoolean musicRefreshQueued = new java.util.concurrent.atomic.AtomicBoolean();
     private Agent(Context context) {
         this.context = context; settings = new Settings(context); store = new LedgerStore(context);
         reader = new UsageReader(context); transport = new Transport(context); uploader = new Uploader(this); management = new Management(this);
+        music = new MusicReader(context, reader, this::refreshMusic);
     }
     synchronized void attach(CollectorService service) {
         this.service = service;
-        if (tickTask != null) tickTask.cancel(false);
-        tickTask = collector.scheduleWithFixedDelay(this::tick, 0, 1000, TimeUnit.MILLISECONDS);
+        collector.execute(music::invalidate);
+        requestTick(0);
         KeepAlive.schedule(context, settings.wanted());
     }
     synchronized void detach(CollectorService owner) {
         if (service != owner) return;
         service = null; if (tickTask != null) tickTask.cancel(false); tickTask = null;
+        collector.execute(() -> { if (service == null) music.close(); });
+    }
+    synchronized void requestTick(long delay) {
+        if (tickTask != null) tickTask.cancel(false);
+        tickTask = service == null || !settings.wanted() ? null : collector.schedule(this::tick, delay, TimeUnit.MILLISECONDS);
+    }
+    private synchronized void requestEarlierTick(long delay) {
+        if (tickTask == null || tickTask.isDone() || tickTask.getDelay(TimeUnit.MILLISECONDS) > delay) requestTick(delay);
+    }
+    long nextTickDelay() {
+        Config c = settings.get();
+        if (!c.configured()) return 30_000;
+        long now = SystemClock.elapsedRealtime();
+        long delay = Math.min(30_000, Math.min(uploader.nextDelay(now), music.nextDelay(now)));
+        if (settings.tracking()) {
+            delay = Math.min(delay, reader.screen() && reader.unlocked() ? 1000 : nextCapture - now);
+            if (c.batteryEnabled) delay = Math.min(delay, nextBattery - now);
+        }
+        return Math.max(1000, Math.min(delay, nextCleanup - now));
     }
     private void tick() {
         if (!settings.wanted()) return;
         try {
             Config c = settings.get(); if (!c.configured()) return;
+            boolean immediate = false;
             if (settings.tracking()) {
                 long elapsed = SystemClock.elapsedRealtime();
-                if (reader.screen() || elapsed >= nextCapture) {
+                if ((reader.screen() && reader.unlocked()) || elapsed >= nextCapture) {
                     capture(c, false); nextCapture = elapsed + (c.mode.equals("xiaomi") ? 60_000 : 30_000);
                 }
                 if (c.batteryEnabled && elapsed >= nextBattery) { status(c, "periodic", System.currentTimeMillis()); nextBattery = elapsed + c.batterySeconds * 1000L; }
-                String foreground = foreground(c).optJSONObject("app") == null ? "" : foreground(c).getJSONObject("app").optString("process_name");
+                JSONObject app = foreground(c).optJSONObject("app");
+                String foreground = app == null ? "" : app.optString("process_name");
                 if (!Objects.equals(lastForeground, foreground)) {
-                    lastForeground = foreground; if (c.uploadOnChange) uploader.request(false, true); updateNotification();
+                    lastForeground = foreground; immediate = c.uploadOnChange; updateNotification();
                 }
             }
-            uploader.request(false, false);
+            immediate |= music.refresh(c, settings.tracking(), false);
+            uploader.request(false, immediate);
             if (SystemClock.elapsedRealtime() >= nextCleanup) { store.cleanup(); nextCleanup = SystemClock.elapsedRealtime() + 3600000; }
         } catch (Exception e) { captureNote = message(e); }
+        finally { requestTick(nextTickDelay()); }
     }
     void capture(Config c, boolean stop) {
         if (!UsageReader.permitted(context)) {
@@ -103,7 +129,6 @@ final class Agent {
             store.commit(c.scope, state, slices, statuses, reader); saved = state; cursor = end; first = false;
         } while (cursor < now);
         if (!reset) captureNote = "";
-        store.put("last_capture", ""+now);
         String bootKey = c.scope + ":boot";
         if (!Integer.toString(boot).equals(store.get(bootKey, ""))) { status(c, "startup", now); store.put(bootKey, ""+boot); }
     }
@@ -111,8 +136,9 @@ final class Agent {
     JSONObject foreground(Config c) {
         long now = System.currentTimeMillis(); JSONObject state = store.checkpoint(c.scope);
         String pkg = null; long since = now;
-        if (!settings.tracking() && c.scope.equals(settings.get().scope)) since = Math.min(now, settings.prefs.getLong("idle_since", now));
-        if (settings.tracking() && c.scope.equals(settings.get().scope) && UsageReader.permitted(context) && state != null
+        boolean tracking = settings.tracking(), currentScope = c.scope.equals(settings.get().scope);
+        if (!tracking && currentScope) since = Math.min(now, settings.prefs.getLong("idle_since", now));
+        if (tracking && currentScope && UsageReader.permitted(context) && state != null
             && now >= state.optLong("cursor") && now - state.optLong("cursor") < 10_000 && reader.screen() && reader.unlocked()) {
             UsageReducer reducer = new UsageReducer(state, (p,s,e) -> {}); pkg = reducer.active(); since = Math.min(now, reducer.activeSince);
         }
@@ -152,7 +178,9 @@ final class Agent {
                     lastPower = current;
                 } else {
                     capture(c, false);
+                    nextCapture = SystemClock.elapsedRealtime() + (c.mode.equals("xiaomi") ? 60_000 : 30_000);
                     if ((Intent.ACTION_SCREEN_OFF.equals(action) && c.uploadOnSuspend) || Intent.ACTION_USER_PRESENT.equals(action)) uploader.request(false, true);
+                    requestTick(0);
                 }
             } catch (Exception e) { captureNote = message(e); }
         });
@@ -163,9 +191,11 @@ final class Agent {
             try {
                 if (settings.tracking()) { try { capture(c, true); } finally { settings.intent(true, false); store.clearCheckpoint(c.scope); } }
                 else { store.clearCheckpoint(c.scope); settings.intent(true, true); nextBattery = 0; capture(c, false); }
+                music.refresh(c, settings.tracking(), true);
                 uploader.request(false, true);
             } catch (Exception e) { captureNote = message(e); }
             updateNotification();
+            requestTick(0);
         });
     }
     void stop() {
@@ -174,6 +204,7 @@ final class Agent {
             try { if (settings.tracking()) capture(c, true); } catch (Exception e) { captureNote = message(e); }
             finally {
                 settings.intent(false, false); store.clearCheckpoint(c.scope); KeepAlive.schedule(context, false);
+                music.refresh(c, false, true);
                 uploader.request(true, true);
                 CollectorService owner = service; if (owner != null) owner.stopAfterUpload();
             }
@@ -193,10 +224,11 @@ final class Agent {
                 Config previous = settings.get();
                 if (settings.tracking() && previous.configured()) { capture(previous, true); store.clearCheckpoint(previous.scope); }
                 settings.save(checked); lastForeground = null; nextBattery = 0;
+                music.refresh(checked, settings.wanted() && settings.tracking(), true);
                 if (settings.tracking()) capture(checked, false);
                 KeepAlive.schedule(context, settings.wanted());
                 if (settings.wanted()) uploader.request(true, true);
-                done.run(); updateNotification();
+                done.run(); updateNotification(); requestTick(0);
             } catch (Exception e) { error.accept(message(e)); }
         });
     }
@@ -205,6 +237,8 @@ final class Agent {
             try {
                 Config c = settings.get();
                 if (!settings.wanted() || !c.configured()) { done.run(); return; }
+                // The live collector already captures and uploads on its own deadlines.
+                if (service != null) { done.run(); return; }
                 if (settings.tracking()) capture(c, false);
                 if (service == null && KeepAlive.batteryExempt(context)) KeepAlive.start(context, CollectorService.ACTION_RECOVER);
                 uploader.request(true, true); uploader.whenIdle(done);
@@ -212,5 +246,16 @@ final class Agent {
         });
     }
     void updateNotification() { CollectorService owner = service; if (owner != null) owner.refreshNotification(); }
+    void refreshMusic() {
+        if (!musicRefreshQueued.compareAndSet(false, true)) return;
+        collector.execute(() -> {
+            musicRefreshQueued.set(false);
+            try {
+                Config config = settings.get();
+                if (music.refresh(config, service != null && settings.wanted() && settings.tracking(), true) && settings.wanted()) uploader.request(false, true);
+                requestEarlierTick(nextTickDelay());
+            } catch (Exception e) { captureNote = message(e); }
+        });
+    }
     static String message(Exception e) { return e.getMessage() == null ? "操作未完成，请稍后重试" : e.getMessage(); }
 }

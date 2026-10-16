@@ -83,6 +83,10 @@ def merge_devices(db, target_id, source_id):
                "ON CONFLICT(device_id) DO UPDATE SET observed_at=excluded.observed_at,since=excluded.since,"
                "app_name=excluded.app_name,process_name=excluded.process_name "
                "WHERE excluded.observed_at>device_foreground.observed_at", (target_id, source_id))
+    db.execute("INSERT INTO device_music(device_id,observed_at,track) "
+               "SELECT ?,observed_at,track FROM device_music WHERE device_id=? "
+               "ON CONFLICT(device_id) DO UPDATE SET observed_at=excluded.observed_at,track=excluded.track "
+               "WHERE excluded.observed_at>device_music.observed_at", (target_id, source_id))
     db.execute("UPDATE devices SET first_seen=?,last_seen=?,platform=?,agent_version=? WHERE id=?",
                (min(target["first_seen"], source["first_seen"]), latest["last_seen"],
                 latest["platform"], latest["agent_version"], target_id))

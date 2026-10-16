@@ -11,7 +11,7 @@ Authorization: Bearer 用户在网页生成的上传密钥
 `GET /api/v1/agent/check` 返回：
 
 ```json
-{"ok":true,"account_id":1,"username":"alice","schema_version":1,"features":["app_usage","device_status","management","app_aliases","app_colors","device_name_identity","foreground"],"retention_days":365}
+{"ok":true,"account_id":1,"username":"alice","schema_version":1,"features":["app_usage","device_status","management","app_aliases","app_colors","device_name_identity","foreground","music"],"retention_days":365}
 ```
 
 `account_id` 在当前服务器中稳定，用于客户端绑定队列；上传归属以服务端根据密钥查出的用户为准，不信任客户端提供的用户信息。
@@ -148,6 +148,20 @@ Authorization: Bearer 用户在网页生成的上传密钥
 | 422 | 数据格式无效、持续时间不符、时间不含时区、设备时钟超前超过5分钟 |
 
 `GET /healthz` 不需要鉴权，仅用于容器健康检查，不返回账户或设备信息。
+
+## 当前音乐（服务端 r12）
+
+`GET /api/v1/agent/check` 的 `features` 增加 `music`。客户端确认后，在原上传包顶层附带可选 `music`：
+
+```json
+{"observed_at":"2026-10-16T08:00:00+00:00","track":{"title":"歌曲名称","artist":"歌手","album":"专辑","app_name":"播放器","process_name":"music.exe","state":"playing"}}
+```
+
+`state` 为 `playing` 或 `paused`；歌名须为去除首尾空白后的 1–300 字符，歌手 / 专辑为 0–300 字符，播放器名称 / 标识为 1–200 字符。`observed_at` 必须有时区，不能超前超过 5 分钟。停止播放、撤销权限、暂停采集或关闭同步时发送新时间戳与 `track:null`。旧客户端省略 `music` 时清除该设备的旧音乐状态。旧服务端不接收此新字段，客户端必须协商后使用。
+
+服务端按采样时间只保存每设备最新状态，较旧重试不会覆盖较新状态，清除快照同样参与时间排序。音乐与事件在一个事务中写入，校验失败整包回滚，不增加使用时长或事件确认 ID。快照随设备删除，超出保留期清理。Windows 读取 [系统媒体会话](https://learn.microsoft.com/en-us/uwp/api/windows.media.control.globalsystemmediatransportcontrolssession)，Android 读取 [MediaSessionManager](https://developer.android.com/reference/android/media/session/MediaSessionManager)，不接收音频或通知正文。
+
+看板、个人记录和 `/api/web/live` 的设备对象增加 `music`（不可用时为 `null`）。可用时包含上述 `track` 字段与 Unix 秒数 `observed_at`；应用名称应用设备别名。设备最近联络和音乐采样均须不超过 330 秒，采样还须不早于最近联络 90 秒以上，避免旧快照在新心跳后继续显示。音乐独立于前台应用，手机熄屏听歌也可展示。播放变化触发原 SSE `live` 通知，不触发历史扫描；可见范围与原设备记录一致。
 
 ## 网页查看接口
 

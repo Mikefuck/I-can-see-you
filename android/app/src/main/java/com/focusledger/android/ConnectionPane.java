@@ -25,6 +25,10 @@ final class ConnectionPane {
         LinearLayout sampling = ui.card(a.body); ui.title(sampling, "采集与上传");
         EditText interval = ui.field(sampling, "上传间隔 / 秒（10–300）", ""+c.uploadSeconds, InputType.TYPE_CLASS_NUMBER);
         Switch change = ui.toggle(sampling, "应用切换时立即上传", c.uploadOnChange);
+        Switch music = ui.toggle(sampling, "同步正在播放的音乐到网页", c.musicEnabled);
+        ui.note(sampling, "读取系统媒体会话提供的歌名、歌手、专辑和播放器，不录音、不读取通知正文。后台播放与熄屏听歌也可同步；暂停采集会停止音乐同步。需开启下方通知访问权限。");
+        a.dynamic(sampling, "music_permission", 12, false);
+        sampling.addView(ui.button("设置音乐识别的通知访问权限", v -> MusicReader.openSettings(a)));
         Switch battery = ui.toggle(sampling, "记录电量和充电状态", c.batteryEnabled);
         EditText batteryInterval = ui.field(sampling, "电池记录间隔 / 秒（30–3600）", ""+c.batterySeconds, InputType.TYPE_CLASS_NUMBER);
         Switch suspend = ui.toggle(sampling, "熄屏时尝试上传", c.uploadOnSuspend);
@@ -37,11 +41,12 @@ final class ConnectionPane {
                 next.apiKey = key.getText().toString().trim(); next.deviceName = name.getText().toString().trim();
                 next.uploadSeconds = Integer.parseInt(interval.getText().toString()); next.batterySeconds = Integer.parseInt(batteryInterval.getText().toString());
                 next.uploadOnChange = change.isChecked(); next.batteryEnabled = battery.isChecked(); next.uploadOnSuspend = suspend.isChecked();
+                next.musicEnabled = music.isChecked();
                 next.uploadOnShutdown = shutdown.isChecked(); next.bootEnabled = boot.isChecked(); next.validate();
-                a.verifyAndSave(next, a::render);
+                a.verifyAndSave(next, a::render, true);
             } catch (Exception e) { a.toast(Agent.message(e)); }
         }));
-        ui.note(a.body, "首次接入、修改地址、密钥或设备名称需要联网验证。已验证的连接可离线调整采集选项。");
+        ui.note(a.body, "验证连接并保存会联网重新检查服务器支持的功能，地址不变也会更新。应用名称、颜色和外观仍可离线调整。");
         LinearLayout rules = ui.card(a.body); ui.title(rules, "应用名称与颜色");
         ui.note(rules, "按应用包名设置显示名称和 12 种预设配色。保存后也会同步服务端已有历史记录。");
         rules.addView(ui.button("管理应用名称与颜色", v -> new AppRulesPane(a).show()));

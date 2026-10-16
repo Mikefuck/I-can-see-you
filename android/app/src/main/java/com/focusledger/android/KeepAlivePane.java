@@ -24,7 +24,8 @@ final class KeepAlivePane {
         LinearLayout common = ui.card(a.body); ui.title(common, "系统权限与后台运行");
         a.dynamic(common, "usage_permission", 14, false); common.addView(ui.button("设置使用情况访问权限", v -> KeepAlive.usageSettings(a)));
         a.dynamic(common, "battery_permission", 14, false); common.addView(ui.button("允许忽略电池优化", v -> KeepAlive.batterySettings(a)));
-        a.dynamic(common, "notifications", 14, false); common.addView(ui.button("管理持续记录通知", v -> KeepAlive.notificationSettings(a)));
+        a.dynamic(common, "notifications", 14, false); common.addView(ui.button("关闭 / 管理状态通知", v -> KeepAlive.notificationSettings(a)));
+        ui.note(common, "开始采集不再自动申请通知权限。Android 13 及以上新安装默认不显示通知栏状态；旧版本已允许通知的用户，可点上方按钮手动关闭一次。Android 9–12 也需在系统设置中关闭。\n\n关闭状态通知后仍保留实时采集，系统仍可能在“正在运行的应用”等位置显示服务。暂停、上传和停止可在总览操作。此开关与音乐识别的通知访问权限不同。");
         common.addView(ui.button("打开应用信息与后台设置", v -> KeepAlive.appInfo(a)));
         if (c.mode.equals("xiaomi")) {
             LinearLayout vendor = ui.card(a.body); ui.title(vendor, "小米 / Redmi 专项设置");

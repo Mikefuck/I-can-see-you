@@ -9,6 +9,7 @@ Windows 安装包使用 Inno Setup：https://jrsoftware.org/。安装向导的�
 - Python：https://www.python.org/ 与 https://docs.python.org/3/license.html
 - Qt / PySide6 / Shiboken：https://www.qt.io/licensing/ 与 https://code.qt.io/cgit/pyside/pyside-setup.git/
 - PyInstaller：https://github.com/pyinstaller/pyinstaller
+- PyWinRT 3.2.1（winrt-runtime、Windows.Media.Control / Media / Foundation / Foundation.Collections 投影，MIT）：https://github.com/pywinrt/pywinrt ，许可：https://github.com/pywinrt/pywinrt/blob/main/LICENSE
 - FastAPI：https://github.com/fastapi/fastapi
 - Starlette：https://github.com/Kludex/starlette
 - Pydantic：https://github.com/pydantic/pydantic

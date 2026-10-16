@@ -12,7 +12,7 @@ import java.util.Locale;
 import java.util.UUID;
 
 public final class Config {
-    public static final String VERSION = "0.1.2";
+    public static final String VERSION = "0.1.5";
     public String primary = "", fallback = "", apiKey = "", deviceName = Build.MODEL;
     public String deviceId = UUID.randomUUID().toString(), scope = "", username = "";
     public String mode = KeepAlive.isXiaomi() ? "xiaomi" : "standard", theme = "system";
@@ -20,6 +20,7 @@ public final class Config {
     public int uploadSeconds = 30, batterySeconds = 300;
     public boolean batteryEnabled = true, uploadOnChange = true, uploadOnSuspend = true;
     public boolean uploadOnShutdown = true, bootEnabled = true;
+    public boolean musicEnabled = true;
     public JSONObject aliases = new JSONObject(), colors = new JSONObject();
     public List<String> features = new ArrayList<>();
 
@@ -35,6 +36,7 @@ public final class Config {
         batteryEnabled = j.optBoolean("batteryEnabled", true); uploadOnChange = j.optBoolean("uploadOnChange", true);
         uploadOnSuspend = j.optBoolean("uploadOnSuspend", true); uploadOnShutdown = j.optBoolean("uploadOnShutdown", true);
         bootEnabled = j.optBoolean("bootEnabled", true);
+        musicEnabled = j.optBoolean("musicEnabled", true);
         if (j.optJSONObject("aliases") != null) aliases = j.optJSONObject("aliases");
         if (j.optJSONObject("colors") != null) colors = j.optJSONObject("colors");
         JSONArray f = j.optJSONArray("features");
@@ -52,6 +54,7 @@ public final class Config {
                 .put("username", username).put("accountId", accountId).put("mode", mode).put("theme", theme)
                 .put("uploadSeconds", uploadSeconds).put("batterySeconds", batterySeconds)
                 .put("batteryEnabled", batteryEnabled).put("uploadOnChange", uploadOnChange)
+                .put("musicEnabled", musicEnabled)
                 .put("uploadOnSuspend", uploadOnSuspend).put("uploadOnShutdown", uploadOnShutdown)
                 .put("bootEnabled", bootEnabled).put("aliases", new JSONObject(aliases.toString()))
                 .put("colors", new JSONObject(colors.toString())).put("features", new JSONArray(features));

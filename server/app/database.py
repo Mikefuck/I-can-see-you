@@ -66,6 +66,11 @@ CREATE TABLE IF NOT EXISTS device_clients (
     id TEXT PRIMARY KEY,
     device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS device_music (
+    device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+    observed_at REAL NOT NULL,
+    track TEXT
+);
 CREATE INDEX IF NOT EXISTS device_clients_device ON device_clients(device_id);
 CREATE TABLE IF NOT EXISTS device_computers (
     device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
@@ -194,6 +199,7 @@ class Database:
             db.execute("DELETE FROM events WHERE ended_at <= ?", (cutoff,))
             db.execute("DELETE FROM status_events WHERE occurred_at <= ?", (cutoff,))
             db.execute("DELETE FROM device_foreground WHERE observed_at <= ?", (cutoff,))
+            db.execute("DELETE FROM device_music WHERE observed_at <= ?", (cutoff,))
             # Trim a segment straddling the cutoff so no part older than the limit is retained.
             db.execute(
                 "UPDATE events SET duration_seconds=ended_at-?, started_at=? WHERE started_at < ?",

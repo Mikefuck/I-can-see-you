@@ -37,6 +37,10 @@
                 android:value="User-started continuous personal app usage and battery ledger. A visible notification provides pause and stop controls. Usage is stored locally and synced to the user's own server; collection stops on lock and screen off." />
         </service>
         <service android:name=".RecoveryJob" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true" />
+        <service android:name=".MusicListener" android:label="专注记录 · 当前音乐"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" android:exported="true">
+            <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>
+        </service>
         <receiver android:name=".BootReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

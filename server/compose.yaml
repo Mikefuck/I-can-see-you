@@ -2,7 +2,7 @@
 # 新装先执行 docker volume create focusledger-data；升级时将 FOCUSLEDGER_DATA_VOLUME 设为旧卷实际名称。
 services:
   server:
-    image: ${FOCUSLEDGER_IMAGE:-focusledger-server:2026.10.16-r11}
+    image: ${FOCUSLEDGER_IMAGE:-focusledger-server:2026.10.16-r12}
     platform: linux/amd64
     pull_policy: never
     restart: unless-stopped

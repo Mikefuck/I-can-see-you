@@ -484,7 +484,7 @@ def create_app(settings=None):
     def check(request: Request):
         user = api_user(request)
         return {"ok": True, "account_id": user["id"], "username": user["username"], "schema_version": 1,
-                "features": ["app_usage", "device_status", "management", "app_aliases", "app_colors", "device_name_identity", "foreground"],
+                "features": ["app_usage", "device_status", "management", "app_aliases", "app_colors", "device_name_identity", "foreground", "music"],
                 "retention_days": database.retention_days}
 
     @app.put("/api/v1/agent/app-aliases")
@@ -520,10 +520,21 @@ def create_app(settings=None):
             raise HTTPException(422, "设备时间超前超过 5 分钟，请同步系统时钟")
         if batch.foreground and batch.foreground.observed_at.timestamp() > now + 300:
             raise HTTPException(422, "设备时间超前超过 5 分钟，请同步系统时钟")
+        if batch.music and batch.music.observed_at.timestamp() > now + 300:
+            raise HTTPException(422, "设备时间超前超过 5 分钟，请同步系统时钟")
         inserted, duplicates, expired, acknowledged = 0, 0, 0, []
         with database.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             device_id = register_device(db, user["id"], batch.device, request_machine_id(request), now)
+            music = batch.music
+            if music is None:
+                db.execute("DELETE FROM device_music WHERE device_id=?", (device_id,))
+            elif music.observed_at.timestamp() > cutoff:
+                db.execute("INSERT INTO device_music VALUES(?,?,?) ON CONFLICT(device_id) DO UPDATE SET "
+                           "observed_at=excluded.observed_at,track=excluded.track "
+                           "WHERE excluded.observed_at>=device_music.observed_at",
+                           (device_id, music.observed_at.timestamp(),
+                            music.track.model_dump_json() if music.track else None))
             foreground = batch.foreground
             if foreground is None:
                 # Disabled options and old clients return to the historical usage fallback.

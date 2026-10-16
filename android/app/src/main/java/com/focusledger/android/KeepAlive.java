@@ -21,7 +21,11 @@ final class KeepAlive {
         return value.contains("xiaomi") || value.contains("redmi") || value.contains("poco");
     }
     static boolean batteryExempt(Context c) { return c.getSystemService(PowerManager.class).isIgnoringBatteryOptimizations(c.getPackageName()); }
-    static boolean notifications(Context c) { return c.getSystemService(NotificationManager.class).areNotificationsEnabled(); }
+    static boolean notifications(Context c) {
+        NotificationManager manager = c.getSystemService(NotificationManager.class);
+        android.app.NotificationChannel channel = manager.getNotificationChannel(CollectorService.CHANNEL);
+        return manager.areNotificationsEnabled() && (channel == null || channel.getImportance() != NotificationManager.IMPORTANCE_NONE);
+    }
     static void schedule(Context context, boolean enabled) {
         JobScheduler jobs = context.getSystemService(JobScheduler.class);
         if (!enabled) { jobs.cancel(PERIODIC_JOB); jobs.cancel(RECOVERY_JOB); return; }
@@ -49,7 +53,10 @@ final class KeepAlive {
     }
     static void appInfo(Activity a) { open(a, new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(Uri.parse("package:" + a.getPackageName())), new Intent(Settings.ACTION_SETTINGS)); }
     static void notificationSettings(Activity a) {
-        open(a, new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, a.getPackageName()), new Intent(Settings.ACTION_SETTINGS));
+        Intent app = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, a.getPackageName());
+        if (a.getSystemService(NotificationManager.class).getNotificationChannel(CollectorService.CHANNEL) == null) open(a, app, new Intent(Settings.ACTION_SETTINGS));
+        else open(a, new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, a.getPackageName())
+            .putExtra(Settings.EXTRA_CHANNEL_ID, CollectorService.CHANNEL), app);
     }
     static void xiaomiAutostart(Activity a) {
         if (!isXiaomi()) { appInfo(a); return; }

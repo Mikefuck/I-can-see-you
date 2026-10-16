@@ -72,7 +72,7 @@ if (!$SkipTests) {
     New-Item -ItemType Directory -Path $testTemp -Force | Out-Null
     Push-Location (Join-Path $androidProject 'app')
     try {
-        & (Join-Path $JdkPath 'bin\java.exe') '-Dfile.encoding=UTF-8' "-Duser.home=$testHome" "-Djava.io.tmpdir=$testTemp" '-Drobolectric.dependency.repo.url=https://repo.maven.apache.org/maven2' -cp $classpath org.junit.runner.JUnitCore com.focusledger.android.UsageReducerTest com.focusledger.android.ConfigTest com.focusledger.android.TransportTest com.focusledger.android.StartupTest com.focusledger.android.NavigationTest com.focusledger.android.LedgerStoreTest
+        & (Join-Path $JdkPath 'bin\java.exe') '-Dfile.encoding=UTF-8' "-Duser.home=$testHome" "-Djava.io.tmpdir=$testTemp" '-Drobolectric.dependency.repo.url=https://repo.maven.apache.org/maven2' -cp $classpath org.junit.runner.JUnitCore com.focusledger.android.UsageReducerTest com.focusledger.android.ConfigTest com.focusledger.android.TransportTest com.focusledger.android.StartupTest com.focusledger.android.NavigationTest com.focusledger.android.LedgerStoreTest com.focusledger.android.MusicReaderTest com.focusledger.android.UploaderTest com.focusledger.android.PowerBehaviorTest
         if ($LASTEXITCODE -ne 0) { throw 'Android 逻辑、网络或界面启动测试失败。' }
     } finally { Pop-Location }
     if ($VerifyServer) {
