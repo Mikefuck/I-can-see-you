@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="window_light">#F5F2EB</color>
+    <color name="window_dark">#171D1C</color>
+    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:colorAccent">#A94D39</item>
+        <item name="android:colorControlHighlight">#1AA94D39</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@color/window_light</item>
+        <item name="android:windowAnimationStyle">@style/LedgerWindowAnimation</item>
+    </style>
+    <style name="AppTheme.Dark" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:colorAccent">#F1AD90</item>
+        <item name="android:colorControlHighlight">#24FFFFFF</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@color/window_dark</item>
+        <item name="android:windowAnimationStyle">@style/LedgerWindowAnimation</item>
+    </style>
+    <style name="LedgerWindowAnimation">
+        <item name="android:activityOpenEnterAnimation">@anim/ledger_open_enter</item>
+        <item name="android:activityOpenExitAnimation">@anim/ledger_open_exit</item>
+        <item name="android:activityCloseEnterAnimation">@anim/ledger_close_enter</item>
+        <item name="android:activityCloseExitAnimation">@anim/ledger_close_exit</item>
+    </style>
+</resources>

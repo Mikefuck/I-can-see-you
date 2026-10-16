@@ -437,7 +437,9 @@
       const aside = h("div", { class: "lane-aside" },
         h("div", { class: "aside-now" }, spec.aside),
         h("div", { class: "aside-scrub", "aria-hidden": "true" }, scrubApp, scrubSub));
-      const row = h("div", { class: "tt-row tt-lane" }, spec.label, track, aside);
+      const row = h("div", { class: "tt-row tt-lane" }, spec.label, track);
+      if (spec.battery) spec.label.append(aside);
+      else row.append(aside);
       parent.append(row);
       const lane = Object.assign(spec, { row, track, svg: svgNode, dot, scrubApp, scrubSub });
       this.lanes.push(lane);

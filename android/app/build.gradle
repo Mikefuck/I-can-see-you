@@ -1,0 +1,71 @@
+plugins { id 'com.android.application' }
+
+def signingFile = rootProject.file('../.runtime/android/signing.properties')
+def signingValues = new Properties()
+if (signingFile.exists()) signingFile.withInputStream { signingValues.load(it) }
+
+android {
+    namespace 'com.focusledger.android'
+    compileSdk 36
+    buildToolsVersion '36.0.0'
+
+    defaultConfig {
+        applicationId 'com.focusledger.android'
+        minSdk 28
+        targetSdk 36
+        versionCode 3
+        versionName '0.1.2'
+        testInstrumentationRunner 'android.test.InstrumentationTestRunner'
+    }
+    signingConfigs {
+        if (signingFile.exists()) {
+            localRelease {
+                storeFile file(signingValues.getProperty('storeFile'))
+                storePassword signingValues.getProperty('storePassword')
+                keyAlias signingValues.getProperty('keyAlias')
+                keyPassword signingValues.getProperty('keyPassword')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (signingFile.exists()) signingConfig signingConfigs.localRelease
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    testOptions {
+        unitTests.returnDefaultValues = true
+        unitTests.includeAndroidResources = true
+    }
+    lint { abortOnError true }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+    testImplementation 'org.robolectric:robolectric:4.16.1'
+}
+
+// Export AGP's complete test classpath, including resources and transformed AARs,
+// for direct JUnit execution on Windows paths containing non-ASCII characters.
+tasks.register('exportDebugTestClasspath') {
+    dependsOn {
+        def testTask = tasks.named('testDebugUnitTest').get()
+        testTask.taskDependencies.getDependencies(testTask)
+    }
+    def destination = layout.buildDirectory.file('testDebugUnitTest-classpath.txt')
+    outputs.file(destination)
+    outputs.upToDateWhen { false }
+    doLast { destination.get().asFile.setText(tasks.named('testDebugUnitTest').get().classpath.asPath, 'UTF-8') }
+}
+
+// Local SDK paths are also inspected by Lint; invalidate its report when that file changes.
+tasks.configureEach { task ->
+    if (task.name.startsWith('lintAnalyze')) {
+        task.inputs.file(rootProject.file('local.properties')).withPropertyName('localSdkLocation').optional()
+    }
+}

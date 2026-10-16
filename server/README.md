@@ -1,6 +1,6 @@
 # Linux Docker 服务端 · Focus Ledger
 
-发布目标：**Linux x86_64 / amd64**（Intel / AMD），镜像标签 `focusledger-server:2026.10.16-r10`。镜像内已包含 Python、服务端依赖和网页，部署时无需安装 Python，也无需联网拉取基础镜像。目标服务器需事先安装 Docker Engine 和 Docker Compose 插件。
+发布目标：**Linux x86_64 / amd64**（Intel / AMD），镜像标签 `focusledger-server:2026.10.16-r11`。镜像内已包含 Python、服务端依赖和网页，部署时无需安装 Python，也无需联网拉取基础镜像。目标服务器需事先安装 Docker Engine 和 Docker Compose 插件。
 
 本版为设备时间线、应用排行和使用记录加入程序配色。未设置时自动分配稳定默认色；客户端 0.2.8 的「设置 → 程序名称与颜色」可为本设备修改颜色，或恢复单个 / 全部默认色，保存后同步历史记录。12 种预设色分别适配网页浅色与深色主题。
 
@@ -69,7 +69,7 @@ docker compose -f compose.panel.yaml up -d --force-recreate server
 | --- | --- |
 | `ADMIN_USERNAME` | 首次创建或同步密码的管理员用户名，默认 `admin`；3–40 位英文字母、数字、`_`、`.`、`-`；已有数据库时必须对应已启用的管理员，不用于重命名或提升普通成员权限 |
 | `ADMIN_PASSWORD` | 管理员密码，必须自行填写，12–256 个字符；更改并重新创建容器后同步生效 |
-| `FOCUSLEDGER_IMAGE` | 本地镜像标签，默认 `focusledger-server:2026.10.16-r10` |
+| `FOCUSLEDGER_IMAGE` | 本地镜像标签，默认 `focusledger-server:2026.10.16-r11` |
 | `FOCUSLEDGER_DATA_VOLUME` | 标准 Compose / 源码构建使用的固定外部数据卷名，默认 `focusledger-data`；新装需先创建，已有部署填写旧卷实际名称；面板版使用 `./focus-data` 文件夹，不读取此变量 |
 | `SERVER_PORT` | 对外端口，默认 `8080`；容器内部始终使用 `8080` |
 | `BIND_HOST` | 监听地址，默认 `0.0.0.0`；同机反向代理可设置 `127.0.0.1` |
@@ -118,7 +118,7 @@ docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}
 
 1. 在原部署目录按下文备份数据库，并记录上述原卷名；不要对旧版配置执行 `docker compose down -v`。
 2. 将新发布包中的 TAR 上传到服务器，执行 `docker load -i FocusLedger-server-linux-amd64.tar`。
-3. 更新 Compose，保持 `focus-data:/data` 挂载，并按上文将外部卷名指向旧卷。把 `image` 改为 `focusledger-server:2026.10.16-r10`；使用 `.env` 时同步修改 `FOCUSLEDGER_IMAGE`。`ADMIN_USERNAME` 填现有已启用的管理员用户名，`ADMIN_PASSWORD` 填 12–256 个字符的密码。
+3. 更新 Compose，保持 `focus-data:/data` 挂载，并按上文将外部卷名指向旧卷。把 `image` 改为 `focusledger-server:2026.10.16-r11`；使用 `.env` 时同步修改 `FOCUSLEDGER_IMAGE`。`ADMIN_USERNAME` 填现有已启用的管理员用户名，`ADMIN_PASSWORD` 填 12–256 个字符的密码。
 4. 在 1Panel 保存并重新部署原编排项目，或执行 `docker compose up -d --force-recreate server`。如果更换项目，先停止旧项目，并在新项目中使用相同的外部卷名；同一数据库只运行一个服务端实例。
 5. 查看 `docker compose logs --tail=100 server`，服务健康后使用配置中的用户名和密码登录。
 
@@ -200,9 +200,9 @@ Windows 安装 Docker Desktop 并切换至 Linux 容器后，也可以执行 `py
 不使用 Python 脚本时，等效核心命令为：
 
 ```bash
-docker build --platform linux/amd64 -t focusledger-server:2026.10.16-r10 .
+docker build --platform linux/amd64 -t focusledger-server:2026.10.16-r11 .
 mkdir -p release
-docker save -o release/FocusLedger-server-linux-amd64.tar focusledger-server:2026.10.16-r10
+docker save -o release/FocusLedger-server-linux-amd64.tar focusledger-server:2026.10.16-r11
 ```
 
 本项目发布工具还需要镜像元信息和校验文件，因此重新生成完整 ZIP 时请使用 `build_image.py`。只打包服务端时，在项目根目录执行 `python tools/package_release.py --server-only`；两端都构建完成后可执行 `python tools/package_release.py` 联合打包。

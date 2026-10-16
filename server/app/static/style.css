@@ -657,8 +657,7 @@ a.lane-name:hover { color: var(--red); }
   .tt-lane > .lane-label { grid-column: 1 / -1; }
   .tt-lane > .track { grid-column: 1 / -1; grid-row: 2; }
   .tt-lane > .lane-aside { grid-column: 1 / -1; grid-row: 3; }
-  .aside-now, .aside-scrub { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
-  .is-scrub .aside-scrub { display: flex; }
+  .aside-now, .is-scrub .aside-scrub { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
   .aside-app { flex: 0 1 auto; }
   .aside-sub { flex: 1 1 0; min-width: 0; }
   .track { background: linear-gradient(to right, var(--hair) 1px, transparent 1px) 0 0 / 25% 100%; }

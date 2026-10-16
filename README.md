@@ -1,13 +1,14 @@
 # 专注记录 · Focus Ledger
 
-一套可运行的 Windows 前台应用使用记录客户端，以及面向 Linux Docker 的多用户服务端。
+Windows 前台应用使用记录客户端、原生 Android 试用客户端，以及面向 Linux Docker 的多用户服务端。
 
 ## 下载与快速开始
 
-2026-10-16 客户端 **0.2.9** / 服务端 **2026.10.16-r10**：本次打包包含当前应用栏、前台变化立即上传、SSE 网页实时刷新，以及 gzip 压缩和 500 条补传批次。支持按程序着色的时间线和排行，客户端可选择协调配色、恢复单个或全部默认色；未设置时自动分配稳定颜色。服务端首页直接展示公开设备使用时间，无需登录；未公开记录仅供所有已登录成员查看，分别在「公开设备 / 成员可见」看板展示。客户端数值框和下拉选择框不再响应滚轮改值，滚轮继续用于页面滚动。保留同账户按设备名称识别、公网 / 内网双地址自动切换、深浅色主题、交互动画、系统进程批量选择和历史应用名同步。客户端支持 Windows 10 / 11 x64，服务端镜像支持 Linux x86_64 / amd64。
+2026-10-16 客户端 **0.2.9** / 服务端 **2026.10.16-r11**：本次重新编译两端，并包含设备电量与手机时间线布局调整；此前的当前应用栏、前台变化立即上传、SSE 网页实时刷新，以及 gzip 压缩和 500 条补传批次均已包含。支持按程序着色的时间线和排行，客户端可选择协调配色、恢复单个或全部默认色；未设置时自动分配稳定颜色。服务端首页直接展示公开设备使用时间，无需登录；未公开记录仅供所有已登录成员查看，分别在「公开设备 / 成员可见」看板展示。客户端数值框和下拉选择框不再响应滚轮改值，滚轮继续用于页面滚动。保留同账户按设备名称识别、公网 / 内网双地址自动切换、深浅色主题、交互动画、系统进程批量选择和历史应用名同步。客户端支持 Windows 10 / 11 x64，服务端镜像支持 Linux x86_64 / amd64。
 
 | 文件 | 用法 |
 | --- | --- |
+| [FocusLedger-android.apk](android/release/FocusLedger-android.apk) | Android 9+ 原生试用版 0.1.2，重做手机视觉、图标导航与页面过渡，支持小米优化 / 通用安卓保活模式切换；[安装与小米配置说明](android/README.md) |
 | [FocusLedger-Setup-windows-x64.exe](client/release/FocusLedger-Setup-windows-x64.exe) | 推荐：中文安装向导，可在 Windows 应用列表卸载，无需安装 Python |
 | [FocusLedger.exe](client/release/FocusLedger.exe) | 客户端单文件版，双击运行，无需安装 Python |
 | [FocusLedger-windows-x64.zip](client/release/FocusLedger-windows-x64.zip) | 客户端文件夹版，解压后运行 `FocusLedger/FocusLedger.exe` |
@@ -19,6 +20,7 @@
 ## 目录分类
 
 ```text
+android/                      原生 Android 客户端、构建脚本、测试与 APK
 client/                       Windows 客户端
 ├── main.py                   启动入口
 ├── focus_agent/              采集、缓存、上传与界面
@@ -90,7 +92,7 @@ docker compose ps
 docker compose logs -f server
 ```
 
-在 `.env` 填写 `ADMIN_USERNAME` 和 12–256 个字符的 `ADMIN_PASSWORD`（建议用英文单引号包住密码），默认网页端口为 `8080`。首次启动创建管理员；r4 起修改 Compose 密码并重新创建容器后，会同步更新对应管理员密码并注销该管理员的旧会话，记录和上传密钥保留。Compose 密码不变时，网页中修改的密码在重启后仍保留。从旧版升级到 r4 的第一次启动会采用当前 Compose 密码，请先检查它满足长度要求。可用 `SERVER_PORT` 修改端口，`RETENTION_DAYS` 设置初始1–365天；客户端管理页保存后以数据库中的天数为准。镜像标签为 `focusledger-server:2026.10.16-r10`，与 `.env` 的 `FOCUSLEDGER_IMAGE` 保持一致。
+在 `.env` 填写 `ADMIN_USERNAME` 和 12–256 个字符的 `ADMIN_PASSWORD`（建议用英文单引号包住密码），默认网页端口为 `8080`。首次启动创建管理员；r4 起修改 Compose 密码并重新创建容器后，会同步更新对应管理员密码并注销该管理员的旧会话，记录和上传密钥保留。Compose 密码不变时，网页中修改的密码在重启后仍保留。从旧版升级到 r4 的第一次启动会采用当前 Compose 密码，请先检查它满足长度要求。可用 `SERVER_PORT` 修改端口，`RETENTION_DAYS` 设置初始1–365天；客户端管理页保存后以数据库中的天数为准。镜像标签为 `focusledger-server:2026.10.16-r11`，与 `.env` 的 `FOCUSLEDGER_IMAGE` 保持一致。
 
 等待 `docker compose ps` 显示 `healthy` 后访问网页。日志查看时按 Ctrl+C 不会停止服务。源码目录内的单独镜像位于 `server/release/`；若在源码的 `server` 目录导入，请改用 `docker load -i release/FocusLedger-server-linux-amd64.tar`。**不能把 ZIP 直接传给 `docker load`。**
 
@@ -170,7 +172,7 @@ Get-FileHash client\release\FocusLedger-Setup-windows-x64.exe -Algorithm SHA256
 
 详见 [server/docs/API.md](server/docs/API.md)。后续 Linux / macOS / 手机等客户端可发送相同的 `app_usage` 和 `device_status` 数据包，指定自己的 `platform`。新增记录种类时应扩展服务端模型与数据库迁移，并根据兼容性提升 `schema_version` 或 API 版本。
 
-当前为小规模、单服务器示例：SQLite WAL 和一个 Uvicorn worker。更多并发设备可迁移到 PostgreSQL、独立清理任务和分布式限流；当前不包含移动端采集、远程命令或客户端自动升级。
+当前为小规模、单服务器示例：SQLite WAL 和一个 Uvicorn worker。更多并发设备可迁移到 PostgreSQL、独立清理任务和分布式限流。安卓试用客户端说明见 [android/README.md](android/README.md)；当前不包含远程命令或客户端自动升级。
 
 ## 验证
 
