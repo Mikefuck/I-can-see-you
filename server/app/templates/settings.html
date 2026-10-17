@@ -26,6 +26,20 @@
   </div>
 </section>
 
+<section class="sheet" id="widgets">
+  <h2 class="label">桌面小组件<small>Widgets</small></h2>
+  <div class="sheet-body">
+    <p class="lede">当前有 {{ widget_grants }} 份有效只读授权。安卓小组件授权有效期为 180 天，可查看成员看板；不能上传记录或管理账户。修改密码或停用账户会撤销授权。</p>
+    {% if widget_grants %}
+    <form action="/settings/widgets/revoke" method="post" class="row-actions">
+      <input type="hidden" name="csrf" value="{{ user.csrf }}">
+      <button class="btn">撤销全部小组件授权</button>
+      <span class="hint">所有小组件将在下次刷新时清除成员数据，并要求重新授权。</span>
+    </form>
+    {% endif %}
+  </div>
+</section>
+
 <section class="sheet" id="sharing">
   <h2 class="label">公开<small>Sharing</small></h2>
   <div class="sheet-body">

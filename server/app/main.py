@@ -25,6 +25,7 @@ from .database import Database
 from .devices import event_identity, register_device, request_machine_id
 from .models import AppAliases, AppColors, Batch, DeviceStatusEvent, UsageEvent
 from .management import management_router
+from .widgets import widget_router
 from .realtime import ChangeBroker, HEARTBEAT_SECONDS, RETRY_MILLISECONDS
 from .security import password_hash, token_hash, valid_username, verify_password
 
@@ -128,7 +129,7 @@ def create_app(settings=None):
             with suppress(asyncio.CancelledError):
                 await task
 
-    app = FastAPI(title="Focus Ledger", version="0.2.6", lifespan=lifespan,
+    app = FastAPI(title="Focus Ledger", version="0.2.7", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.database = database
     app.state.changes = changes
@@ -389,7 +390,17 @@ def create_app(settings=None):
         with database.connect() as db:
             devices = db.execute("SELECT * FROM devices WHERE user_id=? AND last_seen>? ORDER BY first_seen",
                                  (user["id"], database.cutoff())).fetchall()
-        return render(request, "settings.html", user, nav="account", devices=devices, **context)
+            widget_grants = db.execute("SELECT COUNT(*) FROM widget_tokens WHERE user_id=? AND expires_at>?",
+                                      (user["id"], time.time())).fetchone()[0]
+        return render(request, "settings.html", user, nav="account", devices=devices, widget_grants=widget_grants, **context)
+
+    @app.post("/settings/widgets/revoke")
+    async def revoke_widgets(request: Request):
+        user = require_user(request)
+        csrf(user, await request.form())
+        with database.connect() as db:
+            db.execute("DELETE FROM widget_tokens WHERE user_id=?", (user["id"],))
+        return RedirectResponse("/settings#widgets", 303)
 
     @app.get("/settings")
     def settings_page(request: Request):
@@ -429,6 +440,7 @@ def create_app(settings=None):
         with database.connect() as db:
             db.execute("UPDATE users SET password_hash=? WHERE id=?", (encoded, user["id"]))
             db.execute("DELETE FROM sessions WHERE user_id=?", (user["id"],))
+            db.execute("DELETE FROM widget_tokens WHERE user_id=?", (user["id"],))
         changes.publish(user["id"])
         response = RedirectResponse("/login", 303)
         response.delete_cookie(COOKIE)
@@ -476,6 +488,7 @@ def create_app(settings=None):
             db.execute("UPDATE users SET enabled=? WHERE id=?", (int(not row["enabled"]), user_id))
             if row["enabled"]:
                 db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+                db.execute("DELETE FROM widget_tokens WHERE user_id=?", (user_id,))
                 db.execute("UPDATE users SET upload_hash=NULL WHERE id=?", (user_id,))
         changes.publish(user_id, history=True)
         return RedirectResponse("/admin/users", 303)
@@ -611,6 +624,7 @@ def create_app(settings=None):
                 "upload_encodings": ["gzip"]}
 
     app.include_router(management_router(database, settings, require_user, require_admin, limiter, COOKIE, changes.publish))
+    app.include_router(widget_router(database, require_user))
     return app
 
 

@@ -24,6 +24,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     csrf TEXT NOT NULL,
     expires_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS widget_tokens (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS widget_tokens_owner ON widget_tokens(user_id);
 CREATE TABLE IF NOT EXISTS devices (
     id TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -171,6 +178,7 @@ class Database:
             encoded = password_hash(password)
             db.execute("UPDATE users SET password_hash=? WHERE id=?", (encoded, admin["id"]))
             db.execute("DELETE FROM sessions WHERE user_id=?", (admin["id"],))
+            db.execute("DELETE FROM widget_tokens WHERE user_id=?", (admin["id"],))
             logging.warning("ADMIN_PASSWORD changed: administrator password synchronized; old sessions revoked")
         # The last environment value is stored only as a salted password hash.
         db.execute("INSERT INTO admin_environment VALUES(?,?) ON CONFLICT(user_id) DO UPDATE "
@@ -206,6 +214,7 @@ class Database:
                 (cutoff, cutoff, cutoff),
             )
             db.execute("DELETE FROM sessions WHERE expires_at <= ?", (time.time(),))
+            db.execute("DELETE FROM widget_tokens WHERE expires_at <= ?", (time.time(),))
             db.execute("DELETE FROM devices WHERE last_seen <= ? AND NOT EXISTS "
                        "(SELECT 1 FROM events WHERE events.device_id=devices.id)", (cutoff,))
         with self.connect() as db:

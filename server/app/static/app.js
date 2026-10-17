@@ -130,7 +130,8 @@
     const dials = [...doc.querySelectorAll("[data-sbb]")];
     const minuteEls = doc.querySelectorAll("[data-hm]"), secondEls = doc.querySelectorAll("[data-ss]");
     const todayEls = doc.querySelectorAll("[data-today]");
-    let lastMinute = null;
+    const secondLine = doc.querySelector("[data-second-line]");
+    let lastMinute = null, timer = 0;
     // The sweep is a CSS animation; a negative delay puts the red hand where the second is now.
     const resync = () => {
       for (const dial of dials) {
@@ -141,6 +142,7 @@
       }
     };
     const tick = () => {
+      clearTimeout(timer);
       const t = now();
       const minute = Math.floor(t / 60 - at(t).getTimezoneOffset());
       if (minute !== lastMinute) {
@@ -153,26 +155,20 @@
         if (lastMinute !== null) minuteHooks.forEach(hook => hook());
         lastMinute = minute;
       }
-      for (const node of secondEls) node.textContent = pad(Math.floor(t % 60));
-      setTimeout(tick, 1000 - ((t * 1000) % 1000) + 8);
+      const second = Math.floor(t % 60);
+      for (const node of secondEls) node.textContent = pad(second);
+      // Sixty positions include both ends: 00 starts at the left, 59 reaches the right.
+      // The same tick drives the digits and this responsive line; polling never restarts it.
+      if (secondLine) secondLine.style.setProperty("--second-progress", second / 59);
+      timer = setTimeout(tick, 1000 - ((t * 1000) % 1000) + 8);
     };
     tick();
     resync();
-    doc.addEventListener("visibilitychange", () => { if (!doc.hidden) resync(); });
+    doc.addEventListener("visibilitychange", () => {
+      clearTimeout(timer);
+      if (!doc.hidden) { resync(); tick(); }
+    });
   }
-
-  /** The red line on the masthead rule fills up until the next refresh. */
-  const refresh = {
-    line: null,
-    run(seconds) {
-      if (!this.line) return;
-      this.line.classList.remove("is-running", "is-failed");
-      this.line.style.setProperty("--poll", `${seconds}s`);
-      this.line.getBoundingClientRect();
-      this.line.classList.add("is-running");
-    },
-    fail() { if (this.line) { this.line.classList.remove("is-running"); this.line.classList.add("is-failed"); } },
-  };
 
   async function getJSON(url, options = {}) {
     const response = await fetch(url, { ...options, credentials: "same-origin", headers: { Accept: "application/json" } });
@@ -216,6 +212,20 @@
     let total = 0;
     for (const [start, end] of runs) total += Math.max(0, Math.min(end, to) - Math.max(start, from));
     return total;
+  }
+  /** One occupied interval whenever any of a person's devices was in use. */
+  function combinedUsage(lanes, from, to) {
+    const spans = lanes.flatMap(lane => lane.runs)
+      .map(([start, end]) => [Math.max(start, from), Math.min(end, to)])
+      .filter(([start, end]) => end > start)
+      .sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const [start, end] of spans) {
+      const last = merged[merged.length - 1];
+      if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+      else merged.push([start, end]);
+    }
+    return merged;
   }
   const resizer = new ResizeObserver(entries => {
     for (const entry of entries) {
@@ -441,7 +451,9 @@
 
     group(head) {
       const group = stagger(h("div", { class: "tt-group" }), this.rows.children.length);
-      if (head) group.append(h("div", { class: "tt-row tt-group-head" }, head.label, h("div", { class: "tt-group-meta" }, head.meta), head.aside));
+      if (head) this.lane(group, { ...head, rowClass: "tt-group-head",
+        label: h("div", { class: "tt-person-label" }, head.label,
+          head.meta ? h("div", { class: "tt-group-meta", text: head.meta }) : null) });
       this.rows.append(group);
       return group;
     }
@@ -454,7 +466,7 @@
       const aside = h("div", { class: "lane-aside" },
         h("div", { class: "aside-now" }, spec.aside),
         h("div", { class: "aside-scrub", "aria-hidden": "true" }, scrubApp, scrubSub));
-      const row = h("div", { class: "tt-row tt-lane" }, spec.label, track);
+      const row = h("div", { class: `tt-row ${spec.rowClass || "tt-lane"}` }, spec.label, track);
       if (spec.battery) spec.label.append(aside);
       else row.append(aside);
       parent.append(row);
@@ -491,6 +503,7 @@
       }
       const bar = Math.max(10, Math.round(height * .42));
       const top = mid - bar / 2 + .5;
+      if (lane.usage) parts.push(s("path", { class: "runs usage", d: barsPath(lane.usage, x, top, bar) }));
       if (lane.runs) {
         const groups = new Map();
         for (const run of lane.runs) {
@@ -616,9 +629,11 @@
         const reading = lane.read ? lane.read(lane.from + frac * (lane.to - lane.from)) : null;
         lane.dot.classList.toggle("is-on", !!(reading && reading.on));
         lane.scrubApp.textContent = reading ? reading.app : "";
+        lane.scrubApp.title = reading ? reading.app : "";
         if (reading && reading.on && reading.color) lane.scrubApp.prepend(swatch(reading.color));
         lane.scrubApp.classList.toggle("is-none", !(reading && reading.on));
         lane.scrubSub.textContent = reading ? reading.sub || "" : "";
+        lane.scrubSub.title = reading ? reading.sub || "" : "";
       }
     }
 
@@ -680,6 +695,16 @@
       if (!before || before[1] <= mark[0] + 5) return { app: mark[1] === "shutdown" ? "已关机" : "休眠中", sub: `${hm(mark[0])} 起`, on: false };
     }
     return { app: "未使用", sub: "", on: false };
+  }
+  function readPerson(lanes, apps, t) {
+    if (t > now()) return { app: "—", sub: "还没到这个时间", on: false };
+    const active = lanes.map(lane => ({ lane, run: findRun(lane.runs, t) })).filter(item => item.run);
+    if (!active.length) return { app: "未使用", sub: "所有设备均无使用记录", on: false };
+    return {
+      app: active.length === 1 ? (apps[active[0].run[2]]?.[0] || "?") : `${active.length} 台设备使用中`,
+      sub: active.map(({ lane, run }) => `${lane.device.name} · ${apps[run[2]]?.[0] || "?"}`).join("；"),
+      on: true,
+    };
   }
   /** Runs arrive as offsets from a base; the last one keeps growing while its device is in use. */
   function liveRuns(device, offsets, base, limit, apps) {
@@ -749,6 +774,7 @@
             person.self ? h("span", { class: "tt-you", text: "你" }) : null),
           meta: person.devices.length ? `${person.devices.length} 台设备` : "",
           aside: h("div", { class: "tt-total" }, h("small", { text: "今日" }), figure(total)),
+          from, to, usage: combinedUsage(lanes, from, t), read: time => readPerson(lanes, data.apps, time),
         });
         if (!person.devices.length) {
           group.append(h("div", { class: "tt-row tt-lane" }, h("div"), h("p", { class: "tt-empty" }, person.self
@@ -808,11 +834,9 @@
         keepFocus(render);
         status.textContent = "";
         status.classList.remove("is-failed");
-        refresh.run(BOARD_POLL);
       } catch (error) {
         status.textContent = `更新失败：${error.message}。${BOARD_POLL} 秒后重试。`;
         status.classList.add("is-failed");
-        refresh.fail();
       } finally {
         clearTimeout(timeout);
         pending = false;
@@ -822,7 +846,6 @@
     }
 
     render();
-    refresh.run(BOARD_POLL);
     timer = setTimeout(poll, BOARD_POLL * 1000);
     doc.addEventListener("visibilitychange", () => { if (!doc.hidden) poll(); });
     minuteHooks.push(() => keepFocus(render));
@@ -1358,7 +1381,6 @@
             { opacity: 1, transform: "translateX(0)" },
           ], { duration: 220, easing: "cubic-bezier(.2,.75,0,1)" });
         }
-        if (bounds.end > now()) refresh.run(every);
       } catch (error) {
         if (ticket !== request || (error.name === "AbortError" && !timedOut)) return;
         if (!quiet) {
@@ -1367,7 +1389,6 @@
         els.view.replaceChildren(h("p", { class: "notice is-error" }, h("b", { text: "未能载入" }),
           h("span", { text: timedOut ? "读取超时，将自动重试。" : error.message })));
         table = null;
-        refresh.fail();
       } finally {
         clearTimeout(timeout);
         clearTimeout(loading);
@@ -1468,7 +1489,6 @@
       const username = liveHost.dataset.livePerson;
       realtime = new window.FocusRealtime(`/api/web/events${username ? `?username=${encodeURIComponent(username)}` : ""}`);
     }
-    refresh.line = doc.querySelector("[data-refresh-line]");
     mastHeight();
     navigationIndicator();
     localTimes();

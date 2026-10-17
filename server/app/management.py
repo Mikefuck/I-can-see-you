@@ -106,6 +106,7 @@ def management_router(database, settings, require_user, require_admin, limiter, 
             db.execute("UPDATE users SET enabled=? WHERE id=?", (int(body.enabled), user_id))
             if not body.enabled:
                 db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+                db.execute("DELETE FROM widget_tokens WHERE user_id=?", (user_id,))
                 db.execute("UPDATE users SET upload_hash=NULL WHERE id=?", (user_id,))
         notify(user_id, history=True)
         return {"id": user_id, "enabled": body.enabled}
