@@ -18,12 +18,24 @@ final class Uploader {
     private long capabilitiesAfter;
     private java.util.List<String> capabilities = java.util.Collections.emptyList();
     private int failures;
-    private final java.util.concurrent.ConcurrentLinkedQueue<Runnable> callbacks = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private final java.util.List<Runnable> callbacks = new java.util.ArrayList<>();
     Uploader(Agent agent) { this.agent = agent; }
     boolean busy() { return busy.get(); }
     long nextDelay(long now) { return busy.get() ? 30_000 : Math.max(retryAfter, regularAfter) - now; }
-    void whenIdle(Runnable callback) { callbacks.add(callback); if (!busy.get()) finishCallbacks(); }
-    private void finishCallbacks() { Runnable callback; while ((callback = callbacks.poll()) != null) callback.run(); }
+    void whenIdle(Runnable callback) {
+        synchronized (callbacks) { callbacks.add(callback); }
+        if (!busy.get()) finishCallbacks();
+    }
+    private void finishCallbacks() {
+        java.util.List<Runnable> ready;
+        synchronized (callbacks) {
+            if (busy.get()) return;
+            ready = new java.util.ArrayList<>(callbacks);
+            callbacks.clear();
+        }
+        // A callback can start another upload; leave its callbacks for that upload to finish.
+        for (Runnable callback : ready) callback.run();
+    }
     void request(boolean manual, boolean immediate) {
         long now = SystemClock.elapsedRealtime();
         if (!manual && (now < retryAfter || (!immediate && now < regularAfter))) return;

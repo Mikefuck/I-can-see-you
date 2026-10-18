@@ -108,6 +108,28 @@ public class UploaderTest {
         assertEquals(2, checks.get()); assertTrue(uploaded.get().has("music"));
     }
 
+    @Test public void idleWaitsForNextUpload() throws Exception {
+        CountDownLatch uploadStarted = new CountDownLatch(1);
+        CountDownLatch releaseUpload = new CountDownLatch(1);
+        CountDownLatch idle = new CountDownLatch(1);
+        server.createContext("/api/v1/usage/batches", exchange -> {
+            uploadStarted.countDown();
+            if (!releaseUpload.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("Upload was not released");
+            reply(exchange, 200, new JSONObject().put("acknowledged_ids", new JSONArray()));
+        });
+        try {
+            agent.uploader.whenIdle(() -> {
+                agent.uploader.request(false, true);
+                agent.uploader.whenIdle(idle::countDown);
+            });
+            assertTrue("Upload did not start", uploadStarted.await(10, TimeUnit.SECONDS));
+            assertEquals("Idle callback ran while the next upload was still active", 1L, idle.getCount());
+        } finally {
+            releaseUpload.countDown();
+        }
+        assertTrue("Idle callback did not run after upload finished", idle.await(10, TimeUnit.SECONDS));
+    }
+
     @Test public void changedKeyRechecksServer() throws Exception {
         supportsMusic = false; upload(false);
         supportsMusic = true; config.apiKey = "another-test-upload-key-123456789012345678901";
