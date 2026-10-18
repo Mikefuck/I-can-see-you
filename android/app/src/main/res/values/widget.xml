@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_name">专注记录 · 今日时刻表</string>
+    <string name="widget_description">查看不同用户与设备的今日使用时间条。可缩放、筛选、翻页和刷新。</string>
+    <color name="widget_paper">#f6f1df</color>
+    <color name="widget_ink">#30312c</color>
+    <color name="widget_muted">#66675c</color>
+    <color name="widget_rule">#d7d1bd</color>
+    <color name="widget_red">#eb0000</color>
+</resources>

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "server-demo",
+      "runtimeExecutable": ".runtime/build-venv/Scripts/python.exe",
+      "runtimeArgs": ["server/tools/demo_server.py"],
+      "port": 8765
+    }
+  ]
+}

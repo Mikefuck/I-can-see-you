@@ -56,7 +56,15 @@ public final class ServerIntegrationProbe {
         try{transport.check(c);throw new AssertionError("Old key remained valid");}catch(Transport.ApiError e){check(e.status==401,"Old key invalidated");}
         c.apiKey=newKey.getString("api_key");check(transport.check(c).getLong("account_id")==1,"Rotated key binding");
         transport.request(c,"POST","/api/v1/usage/batches",body);
+        WidgetStore.Options widget = new WidgetStore.Options(); widget.primary=c.primary; widget.mode="members";
+        WidgetNetwork widgets = new WidgetNetwork(); widgets.authorize(widget,"android_admin",fixture.getString("password"));
+        JSONObject widgetBoard=widgets.fetch(widget); check(widgetBoard.getJSONArray("people").length()==2,"Widget sees public and private members");
+        WidgetData widgetData=WidgetData.parse(widgetBoard,java.time.ZoneId.systemDefault());
+        check(widgetData.devices.size()==1,"Widget reads the actual uploaded device");
+        check("teal".equals(widgetData.devices.get(0).runs().get(0).color()),"Widget preserves web app colors");
+        widgets.revoke(widget);
+        try{widgets.fetch(widget);throw new AssertionError("Revoked widget grant remained valid");}catch(Transport.ApiError e){check(e.status==401,"Widget revocation");}
         transport.at(c.primary,"POST","/api/v1/management/logout",new JSONObject(),null,cookie,csrf,false,8000);
-        System.out.println("Android real-server HTTP integration passed: usage, status, retries, gzip, live state, music playing/pause/clear, aliases, colors, management and key rotation.");
+        System.out.println("Android real-server HTTP integration passed: usage, status, retries, gzip, live state, music playing/pause/clear, aliases, colors, management, key rotation, widget authorization, member timelines and revocation.");
     }
 }

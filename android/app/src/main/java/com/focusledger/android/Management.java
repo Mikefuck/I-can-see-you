@@ -36,7 +36,7 @@ final class Management {
     }
     void logout() throws Exception { try { if (current() != null) request("POST", "/logout", new JSONObject()); } finally { session = null; loginConfig = null; } }
     JSONArray users() throws Exception { return request("GET", "/users", null).getJSONArray("users"); }
-    private String cookies(Map<String, List<String>> headers, String endpoint) {
+    static String cookies(Map<String, List<String>> headers, String endpoint) {
         StringBuilder cookies = new StringBuilder();
         for (Map.Entry<String,List<String>> header : headers.entrySet()) if (header.getKey() != null && header.getKey().equalsIgnoreCase("Set-Cookie")) {
             for (String value : header.getValue()) {

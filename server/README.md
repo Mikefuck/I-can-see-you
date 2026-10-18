@@ -1,18 +1,28 @@
 # Linux Docker 服务端 · Focus Ledger
 
-发布目标：**Linux x86_64 / amd64**（Intel / AMD），镜像标签 `focusledger-server:2026.10.17-r15`。镜像内已包含 Python、服务端依赖和网页，部署时无需安装 Python，也无需联网拉取基础镜像。目标服务器需事先安装 Docker Engine 和 Docker Compose 插件。
+发布目标：**Linux x86_64 / amd64**（Intel / AMD），镜像标签 `focusledger-server:2026.10.18-r16`。镜像内已包含 Python、服务端依赖和网页，部署时无需安装 Python，也无需联网拉取基础镜像。目标服务器需事先安装 Docker Engine 和 Docker Compose 插件。
+
+## r16：时间轴连续缩放（2026-10-18）
+
+设备看板的用户汇总／设备时间条，以及个人记录的日、周、月时刻表支持连续缩放：鼠标进入时间条或顶部刻度后停留 0.5 秒，即可用滚轮围绕指向的时刻放大／缩小；移出即解除。启用前滚轮继续滚动网页，Ctrl／Command 加滚轮保留浏览器原有行为。手机无需等待，双指张合直接缩放，同时移动双指即可平移，单指仍可上下滚动网页和查看时间读数。
+
+缩放范围为全天至约 15 分钟（1–96 倍）。滚轮增量与倍数变化线性对应，双指距离与倍数直接对应；有悬停进度、准备／缩放／平移状态、倍数、可见时段、边界提示与全天范围导航。放大后可鼠标拖动时间条，也可拖动范围导航；顶部控件随时间轴滚动保持可见，点击「全天」复位。键盘支持加减号缩放、0 复位、Alt 加左右键平移，原有方向键查看时间随当前视野细化。系统选择减少动态效果时立即更新。
+
+所有行、应用色条、电量曲线、刻度和时间读数同步缩放，自动刷新保留当前视野，切换日期或日／周／月范围后恢复全天。周／月视图仍使用原有聚合数据，缩放不会增加原始数据的采样精度。本版 Docker 镜像与离线 ZIP 已包含。
+
+已有服务升级：导入本版镜像，将原 `.env` 中的 `FOCUSLEDGER_IMAGE` 或面板编排的 `image` 更新为 `focusledger-server:2026.10.18-r16`，保留原管理员配置和 `/data` 数据卷／目录，重新创建容器并刷新网页。无需更新 Windows 或 Android 客户端。
 
 ## r15：用户设备汇总时间轴（2026-10-17）
 
 用户名后新增一条汇总该用户所有设备的今日时间轴，任一设备的使用时段都会显示，重叠时段合并；划过时间条或使用方向键，可查看当时使用的设备与应用。用户名旁的“你”标识改为同行垂直居中，设备数量移至用户名下方，适配手机窄屏。右侧今日时长继续按各设备时长相加。
 
-已有服务升级：导入新的镜像，将原 `.env` 的 `FOCUSLEDGER_IMAGE` 或面板编排的 `image` 更新为 `focusledger-server:2026.10.17-r15`，保留管理员配置和原 `/data` 挂载，重新创建容器并刷新网页。无需更新客户端。
+已有服务升级：导入新的镜像，将原 `.env` 的 `FOCUSLEDGER_IMAGE` 或面板编排的 `image` 更新为 `focusledger-server:2026.10.18-r16`，保留管理员配置和原 `/data` 挂载，重新创建容器并刷新网页。无需更新客户端。
 
 ## r14：网页时钟与时间轴修复（2026-10-17）
 
 顶部红条改为与页面秒数同步的 60 秒循环：每秒推进，00 位于起点、59 到达终点，下一分钟归零；按屏幕宽度自动适配，数据刷新不再重置红条。时间轴在鼠标悬停、触摸或键盘查看历史时保留行高，包含音乐信息、空白状态与电量行。时钟的红色圆点移到秒针短端。
 
-已有服务升级：导入本包镜像，在原 `.env` 中将 `FOCUSLEDGER_IMAGE` 改为 `focusledger-server:2026.10.17-r15`；面板部署则修改原编排的 `image`。保留原管理员配置、端口及 `/data` 数据卷或目录挂载，重新创建容器，浏览器刷新后即可看到修改。无需更新 Windows 或 Android 客户端。详细命令见下方「从旧版本升级」。
+已有服务升级：导入本包镜像，在原 `.env` 中将 `FOCUSLEDGER_IMAGE` 改为 `focusledger-server:2026.10.18-r16`；面板部署则修改原编排的 `image`。保留原管理员配置、端口及 `/data` 数据卷或目录挂载，重新创建容器，浏览器刷新后即可看到修改。无需更新 Windows 或 Android 客户端。详细命令见下方「从旧版本升级」。
 
 本版为设备时间线、应用排行和使用记录加入程序配色。未设置时自动分配稳定默认色；客户端 0.2.8 的「设置 → 程序名称与颜色」可为本设备修改颜色，或恢复单个 / 全部默认色，保存后同步历史记录。12 种预设色分别适配网页浅色与深色主题。
 
@@ -24,11 +34,11 @@
 
 配套 Android 0.1.6 新增多用户、多设备时间条，使用与网页相同的日期、设备状态和应用配色。原生卡片支持公开数据，无需登录；成员数据通过独立的 180 天只读授权读取。上传密钥无法读取成员看板，小组件令牌不能上传或管理账户；服务器仅存摘要。网页「账户 → 桌面小组件」可撤销全部授权，改密码、停用账户也会撤销。数据库启动时自动新增授权表，保留旧记录与原数据卷。原有 Windows／Android 上传协议继续兼容。
 
-升级：导入新的镜像并将原部署的镜像标签改为 `focusledger-server:2026.10.17-r15`，保留原卷／目录挂载及管理员配置，按下方升级步骤重新创建容器。随后覆盖安装安卓 APK，在小组件设置中读取设备并授权。详见 [API](docs/API.md#桌面小组件只读授权r13)。
+升级：导入新的镜像并将原部署的镜像标签改为 `focusledger-server:2026.10.18-r16`，保留原卷／目录挂载及管理员配置，按下方升级步骤重新创建容器。随后覆盖安装安卓 APK，在小组件设置中读取设备并授权。详见 [API](docs/API.md#桌面小组件只读授权r13)。
 
 ## 使用离线发布包（推荐）
 
-r12 支持当前音乐：配套 Windows 0.3.0 / Android 0.1.3 上报歌名、歌手、专辑、播放器和播放 / 暂停状态。设备看板与成员记录页沿用原有视觉布局，在「当前应用与音乐」及设备栏显示歌曲，后台播放器也会展示。数据遵循原账户可见范围，经 SSE 实时刷新；失联或采样过期（最长 330 秒）后隐藏，暂停采集与正常停止时主动清除。不上传音频、不保存听歌历史，只保存各设备最新一份状态，自动兼容旧数据库。升级时继续使用原数据卷与管理员配置，将 `.env` 中镜像标签改为 `focusledger-server:2026.10.17-r15`，按下方升级步骤重新部署；安卓随后重新验证保存连接。
+r12 支持当前音乐：配套 Windows 0.3.0 / Android 0.1.3 上报歌名、歌手、专辑、播放器和播放 / 暂停状态。设备看板与成员记录页沿用原有视觉布局，在「当前应用与音乐」及设备栏显示歌曲，后台播放器也会展示。数据遵循原账户可见范围，经 SSE 实时刷新；失联或采样过期（最长 330 秒）后隐藏，暂停采集与正常停止时主动清除。不上传音频、不保存听歌历史，只保存各设备最新一份状态，自动兼容旧数据库。升级时继续使用原数据卷与管理员配置，将 `.env` 中镜像标签改为 `focusledger-server:2026.10.18-r16`，按下方升级步骤重新部署；安卓随后重新验证保存连接。
 
 音乐展示预览（隔离的演示数据）：[桌面](docs/music-desktop.jpg)、[手机](docs/music-mobile.jpg)。
 
@@ -91,7 +101,7 @@ docker compose -f compose.panel.yaml up -d --force-recreate server
 | --- | --- |
 | `ADMIN_USERNAME` | 首次创建或同步密码的管理员用户名，默认 `admin`；3–40 位英文字母、数字、`_`、`.`、`-`；已有数据库时必须对应已启用的管理员，不用于重命名或提升普通成员权限 |
 | `ADMIN_PASSWORD` | 管理员密码，必须自行填写，12–256 个字符；更改并重新创建容器后同步生效 |
-| `FOCUSLEDGER_IMAGE` | 本地镜像标签，默认 `focusledger-server:2026.10.17-r15` |
+| `FOCUSLEDGER_IMAGE` | 本地镜像标签，默认 `focusledger-server:2026.10.18-r16` |
 | `FOCUSLEDGER_DATA_VOLUME` | 标准 Compose / 源码构建使用的固定外部数据卷名，默认 `focusledger-data`；新装需先创建，已有部署填写旧卷实际名称；面板版使用 `./focus-data` 文件夹，不读取此变量 |
 | `SERVER_PORT` | 对外端口，默认 `8080`；容器内部始终使用 `8080` |
 | `BIND_HOST` | 监听地址，默认 `0.0.0.0`；同机反向代理可设置 `127.0.0.1` |
@@ -140,7 +150,7 @@ docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}
 
 1. 在原部署目录按下文备份数据库，并记录上述原卷名；不要对旧版配置执行 `docker compose down -v`。
 2. 将新发布包中的 TAR 上传到服务器，执行 `docker load -i FocusLedger-server-linux-amd64.tar`。
-3. 更新 Compose，保持 `focus-data:/data` 挂载，并按上文将外部卷名指向旧卷。把 `image` 改为 `focusledger-server:2026.10.17-r15`；使用 `.env` 时同步修改 `FOCUSLEDGER_IMAGE`。`ADMIN_USERNAME` 填现有已启用的管理员用户名，`ADMIN_PASSWORD` 填 12–256 个字符的密码。
+3. 更新 Compose，保持 `focus-data:/data` 挂载，并按上文将外部卷名指向旧卷。把 `image` 改为 `focusledger-server:2026.10.18-r16`；使用 `.env` 时同步修改 `FOCUSLEDGER_IMAGE`。`ADMIN_USERNAME` 填现有已启用的管理员用户名，`ADMIN_PASSWORD` 填 12–256 个字符的密码。
 4. 在 1Panel 保存并重新部署原编排项目，或执行 `docker compose up -d --force-recreate server`。如果更换项目，先停止旧项目，并在新项目中使用相同的外部卷名；同一数据库只运行一个服务端实例。
 5. 查看 `docker compose logs --tail=100 server`，服务健康后使用配置中的用户名和密码登录。
 
@@ -222,9 +232,9 @@ Windows 安装 Docker Desktop 并切换至 Linux 容器后，也可以执行 `py
 不使用 Python 脚本时，等效核心命令为：
 
 ```bash
-docker build --platform linux/amd64 -t focusledger-server:2026.10.17-r15 .
+docker build --platform linux/amd64 -t focusledger-server:2026.10.18-r16 .
 mkdir -p release
-docker save -o release/FocusLedger-server-linux-amd64.tar focusledger-server:2026.10.17-r15
+docker save -o release/FocusLedger-server-linux-amd64.tar focusledger-server:2026.10.18-r16
 ```
 
 本项目发布工具还需要镜像元信息和校验文件，因此重新生成完整 ZIP 时请使用 `build_image.py`。只打包服务端时，在项目根目录执行 `python tools/package_release.py --server-only`；两端都构建完成后可执行 `python tools/package_release.py` 联合打包。
@@ -261,6 +271,8 @@ r7 的设备识别改为同账户内按名称匹配（去除首尾空白），�
 `app/` 包含接口、数据库、鉴权和网页；网页读模型在 `app/board.py`，模板在 `app/templates`，静态文件在 `app/static`。内容安全策略禁止内联脚本、内联样式和事件属性，脚本不用 `innerHTML`。协议见 [docs/API.md](docs/API.md)。
 
 在完整项目根目录安装 `requirements-dev.txt` 后，运行 `python -m pytest server/tests`；其中 `test_upload_integration.py` 验证真实 HTTP 客户端上传，需要两端依赖。
+
+网页实时更新与时间轴交互测试使用 Node.js 内置测试工具：`node --test server/tests/realtime.test.cjs server/tests/timeline.test.cjs`。时间轴测试覆盖 0.5 秒悬停、滚轮线性增量、双指距离与中心点映射、取消／抬指、平移边界、键盘及减少动态效果。
 
 本机演示可在项目根目录运行 `python server/tools/demo_server.py`，访问 `http://127.0.0.1:8765`，管理员为 `demo`，密码为 `preview-only-123456`。该工具使用合成数据，会重建 `.runtime/demo` 中的演示数据库，不用于正式部署。
 

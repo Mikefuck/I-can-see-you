@@ -106,6 +106,7 @@ public final class MainActivity extends Activity {
         TextView endpoint = dynamic(sync, "endpoint", 12, false); endpoint.setTextColor(ui.muted); endpoint.setPadding(0, ui.dp(7), 0, ui.dp(2));
         dynamic(sync, "error", 12, false).setTextColor(ui.accent);
         Button board = ui.button("打开服务端看板", v -> openBoard(null)); ui.trailingIcon(board, Icons.ARROW); sync.addView(board);
+        sync.addView(ui.button("桌面小组件 · 今日时刻表", v -> startActivity(new Intent(this, WidgetConfigActivity.class))));
         LinearLayout ranks = ui.card(body); ui.title(ranks, "今天用在了哪里"); rankRows(ranks, todayStart(), System.currentTimeMillis(), 6);
         LinearLayout privacy = ui.card(body); privacy.setBackground(ui.shape(ui.surface, 0, 22)); ui.title(privacy, "只记录使用情况");
         ui.note(privacy, "记录前台应用名称、包名、起止时间和设备电量。音乐同步读取系统提供的歌名、歌手、专辑与播放器，仅展示当前状态。不录音，不读取通知正文、聊天、截图或文件内容。锁屏和熄屏停止应用计时，音乐同步可继续。");

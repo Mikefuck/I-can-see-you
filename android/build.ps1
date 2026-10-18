@@ -2,6 +2,8 @@ param(
     [string]$JdkPath = '',
     [string]$SdkPath = '',
     [string]$TestTempPath = '',
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*\.apk$')]
+    [string]$ApkName = 'FocusLedger-android.apk',
     [switch]$SkipTests,
     [switch]$VerifyServer
 )
@@ -72,7 +74,7 @@ if (!$SkipTests) {
     New-Item -ItemType Directory -Path $testTemp -Force | Out-Null
     Push-Location (Join-Path $androidProject 'app')
     try {
-        & (Join-Path $JdkPath 'bin\java.exe') '-Dfile.encoding=UTF-8' "-Duser.home=$testHome" "-Djava.io.tmpdir=$testTemp" '-Drobolectric.dependency.repo.url=https://repo.maven.apache.org/maven2' -cp $classpath org.junit.runner.JUnitCore com.focusledger.android.UsageReducerTest com.focusledger.android.ConfigTest com.focusledger.android.TransportTest com.focusledger.android.StartupTest com.focusledger.android.NavigationTest com.focusledger.android.LedgerStoreTest com.focusledger.android.MusicReaderTest com.focusledger.android.UploaderTest com.focusledger.android.PowerBehaviorTest
+        & (Join-Path $JdkPath 'bin\java.exe') '-Dfile.encoding=UTF-8' "-Duser.home=$testHome" "-Djava.io.tmpdir=$testTemp" '-Drobolectric.dependency.repo.url=https://repo.maven.apache.org/maven2' -cp $classpath org.junit.runner.JUnitCore com.focusledger.android.UsageReducerTest com.focusledger.android.ConfigTest com.focusledger.android.TransportTest com.focusledger.android.StartupTest com.focusledger.android.NavigationTest com.focusledger.android.LedgerStoreTest com.focusledger.android.MusicReaderTest com.focusledger.android.UploaderTest com.focusledger.android.PowerBehaviorTest com.focusledger.android.WidgetDataTest com.focusledger.android.WidgetNetworkTest com.focusledger.android.UsageWidgetTest
         if ($LASTEXITCODE -ne 0) { throw 'Android 逻辑、网络或界面启动测试失败。' }
     } finally { Pop-Location }
     if ($VerifyServer) {
@@ -84,11 +86,12 @@ if (!$SkipTests) {
 }
 $releaseHome = Join-Path $androidProject 'release'
 New-Item -ItemType Directory -Path $releaseHome -Force | Out-Null
-$releaseApk = Join-Path $releaseHome 'FocusLedger-android.apk'
+$releaseApk = Join-Path $releaseHome $ApkName
 Copy-Item -LiteralPath (Join-Path $androidProject 'app\build\outputs\apk\release\app-release.apk') -Destination $releaseApk -Force
 & (Join-Path $SdkPath 'build-tools\36.0.0\apksigner.bat') verify --verbose $releaseApk
 if ($LASTEXITCODE -ne 0) { throw 'APK 签名校验失败。' }
 $releaseHash = (Get-FileHash -LiteralPath $releaseApk -Algorithm SHA256).Hash.ToLowerInvariant()
-Set-Content -LiteralPath (Join-Path $releaseHome 'SHA256SUMS.txt') -Value "$releaseHash  FocusLedger-android.apk" -Encoding ascii
+$checksumName = if ($ApkName -eq 'FocusLedger-android.apk') { 'SHA256SUMS.txt' } else { [IO.Path]::ChangeExtension($ApkName, 'sha256') }
+Set-Content -LiteralPath (Join-Path $releaseHome $checksumName) -Value "$releaseHash  $ApkName" -Encoding ascii
 Write-Output "APK: $releaseApk"
 Write-Output '请备份 .runtime/android/signing 和 signing.properties；后续覆盖升级必须使用同一签名。'

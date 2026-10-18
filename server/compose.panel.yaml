@@ -6,7 +6,7 @@
 # 具体命令见 README；已有命名卷数据须先停服并迁移到此文件夹，再重新部署。
 services:
   server:
-    image: focusledger-server:2026.10.17-r15
+    image: focusledger-server:2026.10.18-r16
     platform: linux/amd64
     pull_policy: never
     restart: unless-stopped

@@ -52,7 +52,9 @@ public final class BoardActivity extends Activity {
                 return true;
             }
         });
-        setContentView(root); web.loadUrl(base + "/");
+        String path = getIntent().getStringExtra("path");
+        if (path == null || !path.startsWith("/people/") || path.contains("\\") || path.contains("\n") || path.contains("\r")) path = "/";
+        setContentView(root); web.loadUrl(base + path);
         if (android.os.Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::back);
     }
     private void back() { if (web != null && web.canGoBack()) web.goBack(); else finish(); }

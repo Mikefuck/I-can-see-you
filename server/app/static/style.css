@@ -273,13 +273,51 @@ h1, h2, h3, p, dl, dd, ol, ul { margin: 0; }
 /* ——— Timetable ——— */
 .timetable { --needle: 0%; --scrub: 0%; --reveal: 100%; position: relative; transition: --needle 1.6s var(--ease), --reveal 1.6s var(--ease); }
 .timetable.is-loading { opacity: .45; transition: opacity .2s; }
+.timetable.is-zoomed, .timetable.is-zooming { transition: none; }
+.tt-chrome { position: sticky; top: var(--mast-h); z-index: 6; background: var(--paper); }
+.tt-tools { padding: 14px 0 10px; border-top: 1px solid var(--rule); }
+.tt-zoom-top { display: flex; align-items: center; justify-content: space-between; gap: 12px 24px; }
+.tt-zoom-hint { display: flex; align-items: center; gap: 9px; min-height: 2.8em; font-size: 12px; line-height: 1.4; color: var(--ink-2); }
+.tt-zoom-indicator { position: relative; flex: none; width: 14px; height: 3px; background: var(--rule); overflow: hidden; }
+.tt-zoom-indicator::after { content: ""; position: absolute; inset: 0; background: var(--red); transform: scaleX(0); transform-origin: left; }
+.is-zoom-waiting .tt-zoom-indicator::after { animation: zoom-ready .5s linear forwards; }
+.is-zoom-ready .tt-zoom-indicator::after, .is-pinching .tt-zoom-indicator::after, .is-panning .tt-zoom-indicator::after { transform: scaleX(1); }
+.is-zoom-ready .tt-zoom-hint, .is-pinching .tt-zoom-hint, .is-panning .tt-zoom-hint, .is-zoom-limit .tt-zoom-hint { color: var(--red); }
+.tt-zoom-controls { display: flex; align-items: center; flex: none; border: 1px solid var(--rule); }
+.tt-zoom-button { display: grid; place-items: center; min-width: 38px; min-height: 38px; padding: 4px 10px; border: 0; background: transparent; color: var(--ink); font: 500 20px/1 var(--fig); cursor: pointer; transition: background .12s, color .12s; }
+.tt-zoom-button:hover:enabled { background: var(--ink); color: var(--paper); }
+.tt-zoom-button:active:enabled { background: var(--signal); color: #fff; }
+.tt-zoom-button:disabled { opacity: .3; cursor: default; }
+.tt-zoom-button:focus-visible, .tt-overview:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
+.tt-zoom-factor { display: block; min-width: 76px; padding: 0 5px; text-align: center; font: 600 14px/1 var(--fig); font-variant-numeric: tabular-nums; }
+.tt-zoom-fit { margin-left: 3px; border-left: 1px solid var(--rule); min-width: 56px; font: 500 12px/1 var(--sans); }
+.tt-zoom-bottom { display: flex; align-items: center; gap: 14px; margin-top: 5px; min-height: 28px; }
+.tt-zoom-range, .tt-zoom-duration { flex: none; font: 500 12px/1.3 var(--fig); font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.tt-zoom-range { min-width: 102px; }
+.tt-zoom-duration { min-width: 102px; text-align: right; }
+.tt-overview { position: relative; flex: 1; min-width: 30px; height: 28px; touch-action: none; cursor: pointer; }
+.tt-overview::before { content: ""; position: absolute; inset: 7px 0; background: repeating-linear-gradient(to right, var(--rule) 0 1px, transparent 1px calc(100% / 24)), var(--wash); }
+.tt-window { position: absolute; top: 7px; bottom: 7px; min-width: 2px; background: var(--ink); border: 1px solid var(--ink); cursor: grab; }
+.tt-window::after { content: ""; position: absolute; left: 50%; top: 2px; bottom: 2px; width: 2px; background: var(--paper); opacity: .7; }
+.tt-overview[aria-disabled="true"], .tt-overview[aria-disabled="true"] .tt-window { cursor: default; }
+.tt-overview[aria-disabled="true"] .tt-window { background: var(--ink-3); border-color: var(--ink-3); }
+.is-zooming .tt-window, .is-pinching .tt-window, .is-panning .tt-window { background: var(--red); border-color: var(--red); }
+.is-panning, .is-pinching { user-select: none; }
+.is-zoom-ready .track, .is-zoom-ready .scale { cursor: zoom-in; }
+.is-zoomed .track, .is-zoomed .scale { cursor: grab; }
+.is-panning .track, .is-panning .scale, .is-panning .tt-overview, .is-panning .tt-window { cursor: grabbing; }
+.timetable.has-timeline-interaction .tt-grid i, .timetable.has-timeline-interaction .track .battery { animation: none; }
+.timetable.has-timeline-interaction .track .battery { stroke-dasharray: none; }
+.timetable .tt-row:not(.has-now) .t-needle { display: none; }
+.timetable.is-future-view .tt-future { display: block; left: 0; }
+@keyframes zoom-ready { to { transform: scaleX(1); } }
 .tt-head, .tt-row { display: grid; grid-template-columns: var(--label) minmax(0, 1fr) var(--aside); column-gap: var(--gap); }
-.tt-head { position: sticky; top: var(--mast-h); z-index: 6; align-items: end; padding-top: 16px; background: var(--paper); }
+.tt-head { position: relative; align-items: end; padding-top: 16px; background: var(--paper); }
 .tt-head::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--ink); transform-origin: left; }
 .tt-title { padding-bottom: 14px; }
 .tt-aside-head { padding-bottom: 14px; }
 .tt-aside-head b { display: block; font: 600 22px/1 var(--fig); font-variant-numeric: tabular-nums; }
-.scale { position: relative; height: 52px; }
+.scale { position: relative; height: 52px; touch-action: pan-y; }
 .scale-h { position: absolute; bottom: 15px; transform: translateX(-50%); font: 500 12px/1 var(--fig); font-variant-numeric: tabular-nums; color: var(--ink-2); }
 .scale-h { transition: opacity .25s; }
 .scale-h.is-first { transform: none; }
@@ -287,11 +325,11 @@ h1, h2, h3, p, dl, dd, ol, ul { margin: 0; }
 .scale-h.is-covered { opacity: 0; }
 .scale-tick { position: absolute; bottom: 3px; width: 1px; height: 5px; background: var(--ink-3); }
 .scale-tick.is-major { height: 9px; background: var(--ink); }
-.scale-flag, .scale-scrub { position: absolute; top: 0; z-index: 2; padding: 3px 6px; transform: translateX(-50%); font: 600 12px/1 var(--fig); font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
+.scale-flag, .scale-scrub { position: absolute; top: 0; z-index: 2; padding: 3px 6px; transform: translateX(calc(-50% + var(--flag-shift, 0px))); font: 600 12px/1 var(--fig); font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
 .scale-flag { left: var(--needle); background: var(--signal); color: #fff; }
-.scale-flag::after { content: ""; position: absolute; left: 50%; top: 100%; width: 2px; height: 34px; margin-left: -1px; background: var(--red); }
+.scale-flag::after { content: ""; position: absolute; left: calc(50% - var(--flag-shift, 0px)); top: 100%; width: 2px; height: 34px; margin-left: -1px; background: var(--red); }
 .scale-scrub { left: var(--scrub); background: var(--ink); color: var(--paper); opacity: 0; transition: opacity .15s; }
-.scale-scrub::after { content: ""; position: absolute; left: 50%; top: 100%; width: 1px; height: 34px; background: var(--ink); }
+.scale-scrub::after { content: ""; position: absolute; left: calc(50% - var(--flag-shift, 0px)); top: 100%; width: 1px; height: 34px; background: var(--ink); }
 .is-scrub .scale-scrub { opacity: 1; }
 .is-scrub .scale-flag { opacity: .25; }
 .is-multi .scale-flag { display: none; }
@@ -652,6 +690,16 @@ a.lane-name:hover { color: var(--red); }
   .live-note { margin-bottom: 12px; }
 
   .tt-head { grid-template-columns: minmax(0, 1fr); padding-top: 10px; }
+  .tt-zoom-top { flex-wrap: wrap; gap: 5px 12px; }
+  .tt-zoom-hint { flex: 1 1 200px; min-height: 2.8em; font-size: 12px; }
+  .tt-zoom-controls { margin-left: auto; }
+  .tt-zoom-button { min-width: 44px; min-height: 44px; }
+  .tt-zoom-factor { min-width: 67px; }
+  .tt-zoom-bottom { flex-wrap: wrap; gap: 0 10px; margin-top: 7px; }
+  .tt-zoom-range { min-width: 0; }
+  .tt-zoom-duration { min-width: 0; margin-left: auto; }
+  .tt-overview { order: 3; flex-basis: 100%; height: 34px; }
+  .tt-overview::before, .tt-window { top: 10px; bottom: 10px; }
   .tt-title { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: 0; }
   .tt-title small { display: inline; margin-left: 8px; }
   .tt-aside-head { display: none; }
@@ -669,7 +717,7 @@ a.lane-name:hover { color: var(--red); }
   .aside-now, .aside-scrub { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
   .aside-app { flex: 0 1 auto; }
   .aside-sub { flex: 1 1 0; min-width: 0; }
-  .track { background: linear-gradient(to right, var(--hair) 1px, transparent 1px) 0 0 / 25% 100%; }
+  .track { background: linear-gradient(to right, var(--hair) 1px, transparent 1px) var(--time-grid-offset, 0px) 0 / var(--time-grid-step, 25%) 100%; }
   .is-day .track .t-needle, .has-now .t-needle { display: block; }
   .tt-empty { grid-column: 1 / -1; }
 

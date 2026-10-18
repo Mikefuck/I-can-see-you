@@ -405,9 +405,16 @@
       this.body = h("div", { class: "tt-body", tabindex: "0", "aria-label": options.bodyLabel },
         this.grid, this.rows,
         h("div", { class: "tt-over", "aria-hidden": "true" }, h("i", { class: "tt-needle" }), h("i", { class: "tt-scrub" })));
-      host.replaceChildren(h("div", { class: "tt-head" }, this.title, this.scale, this.asideHead), this.body);
+      this.chrome = h("div", { class: "tt-chrome" }, h("div", { class: "tt-head" }, this.title, this.scale, this.asideHead));
+      host.replaceChildren(this.chrome, this.body);
       this.retitle(options);
-      this.bindScrub();
+      this.zoom = new window.FocusTimeline.Zoom({ host, axis: this.scale, body: this.body,
+        onChange: () => this.redraw(), onScrub: fraction => this.scrub(fraction), getScrub: () => this.frac,
+        formatRange: (start, end) => ({ range: `${this.axisTime(start, end - start <= 1 / 12)}–${this.axisTime(end, end - start <= 1 / 12)}`,
+          duration: `可见 ${span((end - start) * (this.multi ? 86400 : this.to - this.from))}` }),
+      });
+      this.chrome.prepend(this.zoom.tools);
+      observe(this.scale, () => { if (this.from != null) { this.drawScale(); this.needle(); } });
     }
 
     retitle(options) {
@@ -417,6 +424,14 @@
     }
 
     frame(from, to, multi) {
+      const changed = this.from !== from || this.to !== to || this.multi !== multi;
+      if (changed) {
+        this.zoom.settle();
+        this.zoom.cancelGesture();
+        this.zoom.view = new window.FocusTimeline.Viewport();
+        this.zoom.target = this.zoom.view.copy();
+        this.scrub(null);
+      }
       this.from = from;
       this.to = to;
       this.multi = multi;
@@ -425,28 +440,83 @@
       for (const lane of this.lanes) resizer.unobserve(lane.track);
       this.lanes = [];
       this.rows.replaceChildren();
+      this.zoom.enabled = true;
+      this.zoom.refresh();
+      this.drawScale();
+    }
+
+    axisTime(fraction, seconds = false) {
+      if (fraction >= 1 - 1e-9) return seconds ? "24:00:00" : "24:00";
+      if (this.multi) {
+        const value = Math.max(0, Math.floor(fraction * 86400 + 1e-7));
+        return `${pad(Math.floor(value / 3600))}:${pad(Math.floor(value % 3600 / 60))}${seconds ? `:${pad(value % 60)}` : ""}`;
+      }
+      const time = this.from + fraction * (this.to - this.from);
+      return `${hm(time)}${seconds ? `:${pad(at(time).getSeconds())}` : ""}`;
+    }
+
+    drawScale() {
+      const view = this.zoom.view, duration = this.multi ? 86400 : this.to - this.from;
+      const width = this.scale._width || this.scale.clientWidth || 600;
+      const wanted = view.size * duration / Math.max(1, width / 68);
+      const step = [1, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200].find(value => value >= wanted) || 43200;
+      const minor = step / (step % 5 === 0 ? 5 : 2);
+      // Mobile lanes have their own grid; keep its period and phase aligned with the ruler.
+      this.host.style.setProperty("--time-grid-step", `${step / duration / view.size * width}px`);
+      this.host.style.setProperty("--time-grid-offset", `${view.project(Math.ceil(view.start * duration / step) * step / duration) * width}px`);
       const ticks = [], lines = [];
       this.labels = [];
-      for (let hour = 0; hour <= 24; hour++) {
-        const f = multi ? hour / 24 : ((hour === 24 ? to : hourOf(from, hour)) - from) / (to - from);
+      for (let index = Math.ceil(view.start * duration / minor - 1e-7); index * minor <= view.at(1) * duration + 1e-7; index++) {
+        const value = index * minor, fraction = value / duration, f = view.project(fraction);
+        const major = Math.abs(value / step - Math.round(value / step)) < 1e-7;
         const left = `${(f * 100).toFixed(3)}%`;
-        const tick = h("i", { class: `scale-tick${hour % 6 ? "" : " is-major"}` });
+        const tick = h("i", { class: `scale-tick${major ? " is-major" : ""}` });
         tick.style.left = left;
         ticks.push(tick);
-        if (hour % 3) continue;
-        const label = h("span", { class: `scale-h${hour === 0 ? " is-first" : hour === 24 ? " is-last" : ""}${hour % 6 ? " is-minor" : ""}`, text: pad(hour) });
-        label.style.left = left;
-        label._f = f;
-        this.labels.push(label);
-        ticks.push(label);
-        if (hour && hour < 24) {
-          const line = stagger(h("i", { class: hour % 6 ? null : "is-major" }), hour / 3);
+        if (!major) continue;
+        if (f < .001 || f > .999 || (f * width > 24 && (1 - f) * width > 24)) {
+          const text = view.zoom < 1.00001 && step >= 3600 ? this.axisTime(fraction).slice(0, 2) : this.axisTime(fraction, step < 60);
+          const label = h("span", { class: `scale-h${f < .001 ? " is-first" : f > .999 ? " is-last" : ""}`, text });
+          label.style.left = left;
+          label._f = f;
+          this.labels.push(label);
+          ticks.push(label);
+        }
+        if (f > .001 && f < .999) {
+          const line = h("i", { class: "is-major" });
           line.style.left = left;
           lines.push(line);
         }
       }
       this.scale.replaceChildren(...ticks, this.flag, this.scrubFlag);
       this.grid.replaceChildren(h("i", { class: "tt-future" }), ...lines);
+    }
+
+    redraw() {
+      if (this.from == null) return;
+      // An interaction finishes the one-time entrance sweep before changing the time mapping.
+      this.finishIntro();
+      this.host.classList.add("has-timeline-interaction");
+      this.drawScale();
+      for (const lane of this.lanes) {
+        const width = lane.track._width || lane.track.clientWidth;
+        if (width) this.paint(lane, width);
+      }
+      this.needle();
+    }
+
+    finishIntro() {
+      this.introVersion = (this.introVersion || 0) + 1;
+      clearTimeout(this.revealTimer);
+      this.sweeping = false;
+      this.host.style.setProperty("--reveal", "100%");
+    }
+
+    destroy() {
+      this.zoom.destroy();
+      this.finishIntro();
+      resizer.unobserve(this.scale);
+      for (const lane of this.lanes) resizer.unobserve(lane.track);
     }
 
     group(head) {
@@ -479,13 +549,17 @@
     paint(lane, width) {
       const height = lane.track.clientHeight || 34;
       const mid = Math.round(height / 2);
-      const k = width / (lane.to - lane.from);
-      const x = t => (t - lane.from) * k;
+      const view = this.zoom.view, duration = lane.to - lane.from;
+      const start = lane.from + view.start * duration, end = start + view.size * duration;
+      const k = width / (end - start);
+      const x = t => (t - start) * k;
+      const path = (spans, y, h) => barsPath(spans.filter(([a, b]) => b > start && a < end)
+        .map(([a, b]) => [Math.max(start, a), Math.min(end, b)]), x, y, h);
       lane.svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
       const parts = [];
       if (lane.battery) {
         const charging = lane.battery.filter(point => point[2]).map(point => [point[0], point[0] + 300]);
-        parts.push(s("path", { class: "charging", d: barsPath(charging, x, 0, height) }));
+        parts.push(s("path", { class: "charging", d: path(charging, 0, height) }));
         parts.push(s("line", { class: "axis-line", x1: 0, x2: width, y1: height - .5, y2: height - .5 }));
         let d = "", last = null;
         for (const [t, percent] of lane.battery) {
@@ -498,12 +572,12 @@
       }
       if (lane.marks && lane.marks.length) {
         let d = "";
-        for (const [t] of lane.marks) if (t >= lane.from && t <= lane.to) d += `M${Math.round(x(t)) + .5} ${mid - 11}V${mid + 11}`;
+        for (const [t] of lane.marks) if (t >= start && t <= end) d += `M${Math.round(x(t)) + .5} ${mid - 11}V${mid + 11}`;
         parts.push(s("path", { class: "marks", d }));
       }
       const bar = Math.max(10, Math.round(height * .42));
       const top = mid - bar / 2 + .5;
-      if (lane.usage) parts.push(s("path", { class: "runs usage", d: barsPath(lane.usage, x, top, bar) }));
+      if (lane.usage) parts.push(s("path", { class: "runs usage", d: path(lane.usage, top, bar) }));
       if (lane.runs) {
         const groups = new Map();
         for (const run of lane.runs) {
@@ -512,11 +586,11 @@
           groups.get(color).push(run);
         }
         for (const [color, runs] of groups) {
-          parts.push(s("path", { class: "runs app-color", "data-color": color, d: barsPath(runs, x, top, bar) }));
+          parts.push(s("path", { class: "runs app-color", "data-color": color, d: path(runs, top, bar) }));
         }
         if (this.highlight != null) {
           parts.push(s("path", { class: "hl app-color", "data-color": appColor(lane.colors, this.highlight),
-            d: barsPath(lane.runs.filter(run => run[2] === this.highlight), x, top, bar) }));
+            d: path(lane.runs.filter(run => run[2] === this.highlight), top, bar) }));
         }
       }
       if (lane.bins) {
@@ -530,12 +604,12 @@
         }
         for (const { color, level, spans } of groups.values()) {
           parts.push(s("path", { class: "bins app-color", "data-color": color,
-            "fill-opacity": level / 4, d: barsPath(spans, x, top - 3, bar + 6) }));
+            "fill-opacity": level / 4, d: path(spans, top - 3, bar + 6) }));
         }
         if (this.highlight != null) {
           const hot = lane.bins.filter(bin => bin[2] === this.highlight).map(bin => [bin[0], bin[0] + lane.binSize]);
           parts.push(s("path", { class: "hl app-color", "data-color": appColor(lane.colors, this.highlight),
-            d: barsPath(hot, x, top - 3, bar + 6) }));
+            d: path(hot, top - 3, bar + 6) }));
         }
       }
       lane.svg.replaceChildren(...parts);
@@ -550,20 +624,25 @@
 
     /** Put the needle at now. Returns its position in percent, or null when now is off this page. */
     needle() {
-      const t = now();
+      const t = now(), view = this.zoom.view;
       let pct = null;
-      if (!this.multi && t >= this.from && t < this.to) pct = (t - this.from) / (this.to - this.from) * 100;
+      const main = view.project((t - this.from) / (this.to - this.from));
+      if (!this.multi && t >= this.from && t < this.to && main >= 0 && main <= 1) pct = main * 100;
+      this.host.classList.toggle("is-future-view", !this.multi && t >= this.from && t < this.to && main < 0);
       for (const lane of this.lanes) {
-        const live = t >= lane.from && t < lane.to;
+        const position = view.project((t - lane.from) / (lane.to - lane.from));
+        const live = t >= lane.from && t < lane.to && position >= 0 && position <= 1;
         lane.row.classList.toggle("has-now", live);
-        if (this.multi && live) pct = (t - lane.from) / (lane.to - lane.from) * 100;
+        if (this.multi && live) pct = position * 100;
       }
       this.host.classList.toggle("no-now", pct == null);
       if (pct != null) {
         this.host.style.setProperty("--needle", `${pct.toFixed(3)}%`);
         this.flag.textContent = hm(t);
+        this.placeFlag(this.flag, pct / 100);
       }
       if (!this.sweeping) this.cover(this.multi ? null : pct);
+      if (this.frac != null) this.scrub(this.frac);
       return pct;
     }
 
@@ -575,10 +654,17 @@
       }
     }
 
+    placeFlag(flag, position) {
+      const width = this.scale.clientWidth, half = flag.offsetWidth / 2;
+      const shift = clamp(position * width, half, width - half) - position * width;
+      flag.style.setProperty("--flag-shift", `${shift.toFixed(2)}px`);
+    }
+
     /** Once per page the needle sweeps from midnight to now and the day is drawn in behind it. */
     intro() {
       // Hour numbers stay put until the needle has arrived; only then does it cover one.
       this.sweeping = !calm.matches;
+      const version = this.introVersion = (this.introVersion || 0) + 1;
       const target = this.needle();
       if (calm.matches) return;
       const end = this.multi || target == null ? 100 : target;
@@ -589,6 +675,7 @@
       this.host.getBoundingClientRect();
       style.transition = "";
       requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (version !== this.introVersion) return;
         style.setProperty("--reveal", `${end}%`);
         if (target != null) style.setProperty("--needle", `${target.toFixed(3)}%`);
         clearTimeout(this.revealTimer);
@@ -611,6 +698,8 @@
     }
 
     scrub(frac) {
+      const position = frac == null ? null : this.zoom.view.project(frac);
+      if (position != null && (position < -.00001 || position > 1.00001)) frac = null;
       if (frac == null) {
         if (this.frac == null) return;
         this.frac = null;
@@ -620,13 +709,13 @@
       }
       this.frac = frac;
       this.host.classList.add("is-scrub");
-      this.host.style.setProperty("--scrub", `${(frac * 100).toFixed(3)}%`);
-      const minutes = Math.min(1439, Math.round(frac * 1440));
-      const label = this.multi ? `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}` : hm(this.from + frac * (this.to - this.from));
+      this.host.style.setProperty("--scrub", `${(clamp(position, 0, 1) * 100).toFixed(3)}%`);
+      const label = this.axisTime(frac, this.zoom.view.zoom >= 12);
       this.scrubFlag.textContent = label;
+      this.placeFlag(this.scrubFlag, clamp(position, 0, 1));
       this.setAsideHead(label);
       for (const lane of this.lanes) {
-        const reading = lane.read ? lane.read(lane.from + frac * (lane.to - lane.from)) : null;
+        const reading = lane.read ? lane.read(Math.min(lane.to - .001, lane.from + frac * (lane.to - lane.from))) : null;
         lane.dot.classList.toggle("is-on", !!(reading && reading.on));
         lane.scrubApp.textContent = reading ? reading.app : "";
         lane.scrubApp.title = reading ? reading.app : "";
@@ -635,47 +724,6 @@
         lane.scrubSub.textContent = reading ? reading.sub || "" : "";
         lane.scrubSub.title = reading ? reading.sub || "" : "";
       }
-    }
-
-    bindScrub() {
-      const body = this.body;
-      let touching = false, release = 0;
-      const fracAt = event => {
-        const track = event.target.closest(".track") || this.rows.querySelector(".track");
-        if (!track) return null;
-        const box = track.getBoundingClientRect();
-        if (event.clientX < box.left - 8 || event.clientX > box.right + 8) return null;
-        return clamp((event.clientX - box.left) / box.width, 0, 1);
-      };
-      body.addEventListener("pointermove", event => {
-        if (event.pointerType === "mouse" || touching) this.scrub(fracAt(event));
-      });
-      body.addEventListener("pointerleave", event => { if (event.pointerType === "mouse") this.scrub(null); });
-      body.addEventListener("pointerdown", event => {
-        if (event.pointerType === "mouse" || !event.target.closest(".track")) return;
-        touching = true;
-        clearTimeout(release);
-        this.scrub(fracAt(event));
-      });
-      const end = () => {
-        if (!touching) return;
-        touching = false;
-        release = setTimeout(() => this.scrub(null), 2600);
-      };
-      addEventListener("pointerup", end);
-      addEventListener("pointercancel", end);
-      body.addEventListener("keydown", event => {
-        if (event.key === "Escape") { this.scrub(null); return; }
-        const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
-        if (!step && event.key !== "Home" && event.key !== "End") return;
-        event.preventDefault();
-        let frac = this.frac ?? (this.needle() ?? 50) / 100;
-        if (event.key === "Home") frac = 0;
-        else if (event.key === "End") frac = 1;
-        else frac += step * (event.shiftKey ? 3600 : 900) / 86400;
-        this.scrub(clamp(frac, 0, 1));
-      });
-      body.addEventListener("blur", () => this.scrub(null));
     }
   }
 
@@ -972,6 +1020,7 @@
         ? { title: "时刻表", subtitle: "Timetable", aside: ["合计", "Total"] }
         : { title: "逐日", subtitle: "Day by day", aside: ["当天合计", "Day total"] };
       if (!table || !els.view.contains(table.host)) {
+        table?.destroy();
         const host = h("div");
         els.view.replaceChildren(host);
         table = new Timetable(host, { ...options, bodyLabel: "时刻表。按左右方向键查看某个时刻在用什么。" });
@@ -1299,6 +1348,7 @@
       if (intro) enter(body);
       let lanesRuns = [];
       if (state.span === "year") {
+        table?.destroy();
         table = null;
         const days = daysOf(bounds), totals = new Map();
         for (const [slot, seconds] of payload.bins) {

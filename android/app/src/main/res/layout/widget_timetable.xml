@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:padding="12dp" android:background="@drawable/widget_background">
+    <LinearLayout android:id="@+id/widget_heading" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="20dp"
+        android:orientation="horizontal" android:gravity="center_vertical">
+        <TextView android:id="@+id/widget_title" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+            android:text="专注记录" android:textSize="15sp" android:textStyle="bold" android:textColor="@color/widget_ink" android:maxLines="1" android:ellipsize="end" android:includeFontPadding="false" />
+        <TextView android:id="@+id/widget_date" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="今天" android:textSize="11sp" android:textColor="@color/widget_muted" android:maxLines="1" android:includeFontPadding="false" />
+    </LinearLayout>
+    <TextView android:id="@+id/widget_summary" android:layout_width="match_parent" android:layout_height="20dp"
+        android:text="今日设备使用时间" android:gravity="center_vertical" android:textSize="11sp" android:textColor="@color/widget_muted"
+        android:maxLines="1" android:ellipsize="end" android:includeFontPadding="false" />
+    <ImageView android:id="@+id/widget_axis" android:layout_width="match_parent" android:layout_height="16dp"
+        android:scaleType="fitXY" android:contentDescription="当天时间轴：0点、6点、12点、18点、24点" />
+    <LinearLayout android:id="@+id/widget_rows" android:layout_width="match_parent" android:layout_height="0dp"
+        android:layout_weight="1" android:orientation="vertical" />
+    <TextView android:id="@+id/widget_empty" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:text="点击设置小组件" android:gravity="center_vertical" android:textSize="12sp" android:textColor="@color/widget_muted" android:maxLines="3" android:ellipsize="end" />
+    <LinearLayout android:id="@+id/widget_footer" android:layout_width="match_parent" android:layout_height="28dp"
+        android:orientation="horizontal" android:gravity="center_vertical">
+        <TextView android:id="@+id/widget_refresh" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent"
+            android:text="刷新" android:gravity="center_vertical" android:textSize="10sp" android:textColor="@color/widget_muted"
+            android:maxLines="1" android:ellipsize="end" android:includeFontPadding="false" android:contentDescription="刷新小组件" />
+        <TextView android:id="@+id/widget_previous" android:layout_width="32dp" android:layout_height="match_parent" android:text="‹"
+            android:textSize="22sp" android:gravity="center" android:textColor="@color/widget_ink" android:includeFontPadding="false" android:contentDescription="上一页设备" />
+        <TextView android:id="@+id/widget_page" android:layout_width="wrap_content" android:layout_height="match_parent" android:text="1/1"
+            android:textSize="10sp" android:gravity="center" android:textColor="@color/widget_muted" android:includeFontPadding="false" />
+        <TextView android:id="@+id/widget_next" android:layout_width="32dp" android:layout_height="match_parent" android:text="›"
+            android:textSize="22sp" android:gravity="center" android:textColor="@color/widget_ink" android:includeFontPadding="false" android:contentDescription="下一页设备" />
+        <TextView android:id="@+id/widget_settings" android:layout_width="36dp" android:layout_height="match_parent" android:text="设置"
+            android:textSize="10sp" android:gravity="center" android:textColor="@color/widget_red" android:includeFontPadding="false" android:contentDescription="设置用户、设备与外观" />
+    </LinearLayout>
+</LinearLayout>

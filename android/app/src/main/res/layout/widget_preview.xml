@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="@drawable/widget_background" android:orientation="vertical" android:padding="16dp">
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="专注记录 · 今日时刻表" android:textColor="@color/widget_ink" android:textSize="16sp" android:textStyle="bold" />
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingTop="6dp" android:text="用户与设备 · 今日使用时间" android:textSize="12sp" android:textColor="@color/widget_muted" />
+    <ImageView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:src="@drawable/widget_preview_bars" android:scaleType="fitXY" android:contentDescription="设备使用时间条示意，添加后显示真实记录" />
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="00         06         12         18         24" android:textSize="10sp" android:textColor="@color/widget_muted" />
+</LinearLayout>

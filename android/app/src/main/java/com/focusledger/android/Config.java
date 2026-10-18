@@ -12,7 +12,7 @@ import java.util.Locale;
 import java.util.UUID;
 
 public final class Config {
-    public static final String VERSION = "0.1.5";
+    public static final String VERSION = "0.1.6";
     public String primary = "", fallback = "", apiKey = "", deviceName = Build.MODEL;
     public String deviceId = UUID.randomUUID().toString(), scope = "", username = "";
     public String mode = KeepAlive.isXiaomi() ? "xiaomi" : "standard", theme = "system";

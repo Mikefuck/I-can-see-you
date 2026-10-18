@@ -1,8 +1,8 @@
 {
-  "image": "focusledger-server:2026.10.17-r15",
-  "image_id": "sha256:7a0c5f8e2a39625968eb7b2b5d8a9de7476bc261b12f7d41b6e0ff29c6277f6f",
+  "image": "focusledger-server:2026.10.18-r16",
+  "image_id": "sha256:76ab1a95ea2ca8d3fccfae8b8f99d0a181db40951618154b8620a9c20e88a19a",
   "platform": "linux/amd64",
-  "created": "2026-10-17T01:54:08.88079019Z",
+  "created": "2026-10-18T02:06:38.242908947Z",
   "archive": "FocusLedger-server-linux-amd64.tar",
-  "sha256": "5780b1686c62cb8c17aef1398c259c66486c603ac8dc63e9e9db54ca8bad6483"
+  "sha256": "1536249cc8b7d65616aba1fdc138f72f482e8694339b8d19ce89509461fd4932"
 }
