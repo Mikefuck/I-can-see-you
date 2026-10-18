@@ -65,7 +65,7 @@ tasks.register('exportDebugTestClasspath') {
 
 // Local SDK paths are also inspected by Lint; invalidate its report when that file changes.
 tasks.configureEach { task ->
-    if (task.name.startsWith('lintAnalyze')) {
-        task.inputs.file(rootProject.file('local.properties')).withPropertyName('localSdkLocation').optional()
+    if (task.name.startsWith('lintAnalyze') && rootProject.file('local.properties').isFile()) {
+        task.inputs.file(rootProject.file('local.properties')).withPropertyName('localSdkLocation')
     }
 }
