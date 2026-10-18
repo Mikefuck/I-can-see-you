@@ -52,7 +52,7 @@ function harness(reduce = false) {
       this.attrs = {};
       this.handlers = new Map();
       this.classes = new Set();
-      this.style = {};
+      this.style = { setProperty(name, value) { this[name] = value; } };
       this.captures = new Set();
       this.classList = {
         add: (...names) => names.forEach(name => this.classes.add(name)),
@@ -93,7 +93,7 @@ function harness(reduce = false) {
   const schedule = (callback, delay) => { timers.set(++serial, { at: clock + delay, callback }); return serial; };
   const document = new Element(), window = new Element();
   document.createElement = tag => new Element(tag);
-  const context = { window, document, AbortController, matchMedia: () => ({ matches: reduce }), performance: { now: () => clock },
+  const context = { window, document, AbortController, matchMedia: query => ({ matches: query.includes("reduced-motion") && reduce }), performance: { now: () => clock },
     setTimeout: schedule, clearTimeout: id => timers.delete(id),
     requestAnimationFrame: callback => schedule(() => callback(clock), 16), cancelAnimationFrame: id => timers.delete(id) };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../app/static/timeline.js"), "utf8"), context);
@@ -127,36 +127,31 @@ function harness(reduce = false) {
   return { zoom, host, axis, body, track, window, document, changes, readings, timers, emit, touch, wheel, advance };
 }
 
-test("wheel arms at exactly 500ms, preserves page scroll before that, and disarms on exit", () => {
+test("wheel zooms immediately over the axis without hovering; other areas keep page scrolling", () => {
   const h = harness();
-  h.emit("pointerover");
-  h.advance(499);
-  assert.equal(h.wheel(-120).prevented, false);
-  near(h.zoom.view.zoom, 1);
-  h.advance(1);
-  assert.equal(h.zoom.hover, "ready");
   assert.equal(h.wheel(-120).prevented, true);
   h.advance(100);
-  near(h.zoom.view.zoom, 1.6);
+  near(h.zoom.view.zoom, Math.sqrt(2));
   h.emit("pointerleave");
-  assert.equal(h.wheel(-120).prevented, false);
-  h.emit("pointerover");
-  h.advance(499);
-  assert.equal(h.wheel(-120).prevented, false);
+  assert.equal(h.wheel(-120, { target: h.body }).prevented, false);
+  assert.equal(h.wheel(-120, { target: h.zoom.slider }).prevented, false);
+  assert.equal(h.wheel(-120, { target: h.zoom.tools }).prevented, false);
 });
 
-test("equal wheel movement gives equal scale changes, including a rapid burst and tiny deltas", () => {
+test("wheel scale ratios remain consistent during rapid bursts, tiny deltas and reversals", () => {
   const h = harness();
   h.emit("pointerover", { clientX: 250 });
-  h.advance(500);
   h.wheel(-120, { clientX: 250 });
-  for (let i = 0; i < 10; i++) { h.advance(5); h.wheel(-120, { clientX: 250 }); }
+  for (let i = 0; i < 5; i++) { h.advance(5); h.wheel(-120, { clientX: 250 }); }
   h.advance(100);
-  near(h.zoom.view.zoom, 7.6);
+  near(h.zoom.view.zoom, 8);
   near(h.zoom.view.at(.25), .25);
   h.wheel(-.5, { clientX: 250 });
   h.advance(100);
-  near(h.zoom.view.zoom, 7.6025);
+  near(h.zoom.view.zoom, 8 * 2 ** (.5 / 240));
+  h.wheel(.5, { clientX: 250 });
+  h.advance(100);
+  near(h.zoom.view.zoom, 8);
   near(h.zoom.view.at(.25), .25);
   assert.ok(h.changes.length > 5);
 });
@@ -164,12 +159,111 @@ test("equal wheel movement gives equal scale changes, including a rapid burst an
 test("Ctrl/browser zoom, horizontal scrolling, and wheel outside the axis remain native", () => {
   const h = harness();
   h.emit("pointerover");
-  h.advance(500);
   assert.equal(h.wheel(-120, { ctrlKey: true }).prevented, false);
   assert.equal(h.wheel(-120, { metaKey: true }).prevented, false);
   assert.equal(h.wheel(0, { deltaX: 120 }).prevented, false);
   assert.equal(h.wheel(-120, { target: h.zoom.plus }).prevented, false);
   near(h.zoom.target.zoom, 1);
+});
+
+test("slider controls scale, keeps its original centre through a drag and syncs with buttons", () => {
+  const h = harness(true);
+  const slider = h.zoom.slider;
+  assert.equal(h.zoom.overview.getAttribute("aria-disabled"), "true");
+  h.zoom.setZoom(4, .5, false, .2);
+  slider.emit("pointerdown");
+  slider.value = "0";
+  slider.emit("input");
+  near(h.zoom.view.zoom, 1);
+  slider.value = "100";
+  slider.emit("input");
+  near(h.zoom.view.zoom, MAX_ZOOM);
+  near(h.zoom.view.at(.5), .2);
+  assert.equal(h.zoom.overview.getAttribute("aria-disabled"), "false");
+  assert.match(slider.getAttribute("aria-valuetext"), /96.00 倍/);
+  slider.emit("change");
+  assert.equal(h.zoom.sliderAnchor, null);
+  h.zoom.minus.emit("click");
+  near(h.zoom.view.zoom, MAX_ZOOM / Math.sqrt(2));
+  near(Number(slider.value), Math.log(h.zoom.view.zoom) / Math.log(MAX_ZOOM) * 100);
+  h.zoom.reset();
+  near(Number(slider.value), 0);
+  assert.equal(h.zoom.overview.getAttribute("aria-disabled"), "true");
+});
+
+test("plus and minus are proportional and reversible at low and high zoom", () => {
+  const h = harness(true);
+  for (const zoom of [1, 4, 32, 64]) {
+    h.zoom.setZoom(zoom);
+    const centre = h.zoom.view.at(.5);
+    h.zoom.plus.emit("click");
+    near(h.zoom.view.zoom, zoom * Math.sqrt(2));
+    h.zoom.minus.emit("click");
+    near(h.zoom.view.zoom, zoom);
+    near(h.zoom.view.at(.5), centre);
+  }
+});
+
+test("single finger horizontal drag pans a zoomed range; vertical movement stays page scrolling", () => {
+  const h = harness(true);
+  h.zoom.setZoom(4);
+  h.emit("touchstart", { touches: [h.touch(1, 400, 100)] });
+  assert.equal(h.emit("touchmove", { touches: [h.touch(1, 520, 103)] }).prevented, true);
+  near(h.zoom.view.start, .325);
+  assert.equal(h.host.classList.contains("is-panning"), true);
+  h.emit("touchend", { touches: [] });
+  assert.equal(h.host.classList.contains("is-panning"), false);
+  h.emit("touchstart", { touches: [h.touch(2, 400, 100)] });
+  assert.equal(h.emit("touchmove", { touches: [h.touch(2, 404, 160)] }).prevented, false);
+  assert.equal(h.emit("touchmove", { touches: [h.touch(2, 600, 170)] }).prevented, false);
+  near(h.zoom.view.start, .325);
+  assert.equal(h.readings.at(-1), null);
+  h.emit("touchend", { touches: [] });
+  assert.equal(h.readings.at(-1), null);
+});
+
+test("a tap inspects only on release; full-day swipes do not become accidental inspection", () => {
+  const h = harness(true);
+  h.emit("touchstart", { touches: [h.touch(1, 250)] });
+  assert.equal(h.readings.at(-1), null);
+  h.emit("touchend", { touches: [] });
+  near(h.readings.at(-1), .25);
+  h.advance(2600);
+  assert.equal(h.readings.at(-1), null);
+  h.emit("touchstart", { touches: [h.touch(2, 300)] });
+  assert.equal(h.emit("touchmove", { touches: [h.touch(2, 500)] }).prevented, false);
+  h.emit("touchend", { touches: [] });
+  assert.equal(h.readings.at(-1), null);
+  near(h.zoom.view.zoom, 1);
+});
+
+test("a second finger takes over panning without a time jump, and cancellation clears all state", () => {
+  const h = harness(true);
+  h.zoom.setZoom(4);
+  h.emit("touchstart", { touches: [h.touch(1, 300)] });
+  h.emit("touchmove", { touches: [h.touch(1, 340)] });
+  const before = h.zoom.view.copy();
+  h.emit("touchstart", { touches: [h.touch(1, 340), h.touch(2, 540)] });
+  h.emit("touchmove", { touches: [h.touch(1, 340), h.touch(2, 540)] });
+  near(h.zoom.view.start, before.start);
+  near(h.zoom.view.size, before.size);
+  assert.equal(h.host.classList.contains("is-panning"), false);
+  h.emit("touchcancel");
+  assert.equal(h.zoom.touch, null);
+  assert.equal(h.zoom.pinch, null);
+  assert.equal(h.readings.at(-1), null);
+});
+
+test("overview navigation moves the window without changing its scale", () => {
+  const h = harness(true);
+  h.zoom.setZoom(8);
+  h.emit("pointerdown", { target: h.zoom.overview, clientX: 160, pointerType: "touch" });
+  near(h.zoom.view.at(.5), .1);
+  h.emit("pointermove", { clientX: 280, pointerType: "touch" });
+  near(h.zoom.view.at(.5), .3);
+  near(h.zoom.view.zoom, 8);
+  h.emit("pointerup");
+  assert.equal(h.host.hasPointerCapture(1), false);
 });
 
 test("pinch starts immediately, follows finger distance linearly, and pans with its midpoint", () => {
@@ -201,7 +295,7 @@ test("vertical and cancelled touch sequences keep single-finger page scrolling a
   h.emit("touchstart", { touches: [h.touch(1, 300), h.touch(2, 500)] });
   h.emit("touchcancel");
   assert.equal(h.zoom.pinch, null);
-  assert.equal(h.zoom.touching, false);
+  assert.equal(h.zoom.touch, null);
   assert.equal(h.host.classList.contains("is-pinching"), false);
 });
 
@@ -219,7 +313,7 @@ test("pinch boundaries are visible during the gesture and clear when fingers mov
 
 test("mouse dragging and overview keyboard navigation reach either edge without overshooting", () => {
   const h = harness(true);
-  h.zoom.step(3);
+  h.zoom.setZoom(4);
   near(h.zoom.view.zoom, 4);
   h.emit("pointerdown", { clientX: 400 });
   assert.equal(h.host.classList.contains("is-panning"), true);
@@ -252,7 +346,7 @@ test("zoom limits, reset and reduced motion give explicit state without delayed 
 
 test("keyboard inspection during a zoom animation uses the final visible range", () => {
   const h = harness();
-  h.zoom.step(12);
+  h.zoom.setZoom(13, .5, true);
   h.advance(16);
   h.body.emit("keydown", { key: "Home" });
   near(h.zoom.view.zoom, 13);
@@ -263,12 +357,12 @@ test("keyboard inspection during a zoom animation uses the final visible range",
   near(h.readings.at(-1), h.zoom.view.at(1));
 });
 
-test("blur, hidden tabs and destruction release gestures, wheel arming, timers and listeners", () => {
+test("blur, hidden tabs and destruction release gestures, timers and listeners", () => {
   const h = harness();
   h.emit("pointerover");
   h.advance(500);
   h.window.emit("blur");
-  assert.equal(h.zoom.hover, "idle");
+  assert.equal(h.zoom.pointerPosition, null);
   h.emit("touchstart", { touches: [h.touch(1, 300), h.touch(2, 500)] });
   h.document.hidden = true;
   h.document.emit("visibilitychange");

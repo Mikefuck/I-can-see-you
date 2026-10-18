@@ -405,15 +405,17 @@
       this.body = h("div", { class: "tt-body", tabindex: "0", "aria-label": options.bodyLabel },
         this.grid, this.rows,
         h("div", { class: "tt-over", "aria-hidden": "true" }, h("i", { class: "tt-needle" }), h("i", { class: "tt-scrub" })));
-      this.chrome = h("div", { class: "tt-chrome" }, h("div", { class: "tt-head" }, this.title, this.scale, this.asideHead));
-      host.replaceChildren(this.chrome, this.body);
+      const heading = h("header", { class: "tt-heading" }, this.title);
+      const axisLabel = h("div", { class: "label tt-axis-label" }, "本地时间", h("small", { text: "Local time" }));
+      this.chrome = h("div", { class: "tt-chrome" }, h("div", { class: "tt-head" }, axisLabel, this.scale, this.asideHead));
+      host.replaceChildren(heading, this.chrome, this.body);
       this.retitle(options);
       this.zoom = new window.FocusTimeline.Zoom({ host, axis: this.scale, body: this.body,
         onChange: () => this.redraw(), onScrub: fraction => this.scrub(fraction), getScrub: () => this.frac,
         formatRange: (start, end) => ({ range: `${this.axisTime(start, end - start <= 1 / 12)}–${this.axisTime(end, end - start <= 1 / 12)}`,
           duration: `可见 ${span((end - start) * (this.multi ? 86400 : this.to - this.from))}` }),
       });
-      this.chrome.prepend(this.zoom.tools);
+      host.insertBefore(this.zoom.tools, this.chrome);
       observe(this.scale, () => { if (this.from != null) { this.drawScale(); this.needle(); } });
     }
 

@@ -51,6 +51,7 @@ Source: "{#ClientRoot}\dist\FocusLedger\*"; DestDir: "{app}"; Flags: ignoreversi
 Source: "{#ClientRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ClientRoot}\docs\*.png"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "{#ClientRoot}\..\docs\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ClientRoot}\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\专注记录"; Filename: "{app}\FocusLedger.exe"; Parameters: "--show"; WorkingDir: "{app}"

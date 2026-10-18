@@ -25,7 +25,7 @@ def package_client(include_portable=False):
     outputs = [installer]
     if include_portable:
         single_exe = client_root / "dist" / "FocusLedger.exe"
-        for path in [single_exe, client / "FocusLedger.exe"]:
+        for path in [single_exe, client / "FocusLedger.exe", ROOT / "LICENSE"]:
             if not path.is_file():
                 raise SystemExit(f"Missing {path}. Run client/build.ps1 -Package all first.")
         released_exe = client_root / "release" / "FocusLedger.exe"
@@ -36,6 +36,7 @@ def package_client(include_portable=False):
                 if path.is_file():
                     archive.write(path, Path("FocusLedger") / path.relative_to(client))
             archive.write(client_root / "README.md", "README.md")
+            archive.write(ROOT / "LICENSE", "LICENSE")
             archive.write(ROOT / "docs" / "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-NOTICES.md")
             for path in sorted((client_root / "docs").glob("*.png")):
                 archive.write(path, Path("docs") / path.name)
@@ -56,7 +57,7 @@ def package(server_only=False):
     single_exe = client_root / "dist" / "FocusLedger.exe"
     image = server / "release" / "FocusLedger-server-linux-amd64.tar"
     image_info = server / "release" / "image-info.json"
-    required = [image, image_info, server / "release" / "IMAGE-SHA256SUMS.txt"]
+    required = [image, image_info, server / "release" / "IMAGE-SHA256SUMS.txt", ROOT / "LICENSE"]
     if not server_only:
         required.extend([client / "FocusLedger.exe", single_exe,
                          client_root / "release" / "FocusLedger-Setup-windows-x64.exe"])
@@ -93,6 +94,7 @@ def package(server_only=False):
     with zipfile.ZipFile(server_zip, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in deployment_files:
             archive.write(path, Path("server") / path.relative_to(server))
+        archive.write(ROOT / "LICENSE", "server/LICENSE")
         archive.write(ROOT / "docs" / "THIRD-PARTY-NOTICES.md", "server/docs/THIRD-PARTY-NOTICES.md")
         for path in [image, image_info, server / "release" / "IMAGE-SHA256SUMS.txt"]:
             archive.write(path, Path("server") / path.name)

@@ -23,6 +23,7 @@ def server_release(tmp_path, monkeypatch):
         path.write_bytes(b"not for distribution")
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs/THIRD-PARTY-NOTICES.md").write_text("notices", encoding="utf-8")
+    (tmp_path / "LICENSE").write_text("project license", encoding="utf-8")
     (server / "docs/server-live-apps-preview.jpg").write_bytes(b"preview fixture")
     release = server / "release"
     release.mkdir()
@@ -49,6 +50,7 @@ def test_server_can_be_packaged_without_client_and_excludes_local_secrets(server
     assert not (root / "client").exists()
     with zipfile.ZipFile(release / "FocusLedger-server-docker.zip") as archive:
         assert archive.testzip() is None
+        assert archive.read("server/LICENSE") == b"project license"
         names = set(archive.namelist())
         assert {"server/compose.panel.yaml", "server/app/main.py", "server/.env.example",
                 "server/FocusLedger-server-linux-amd64.tar", "server/IMAGE-SHA256SUMS.txt",

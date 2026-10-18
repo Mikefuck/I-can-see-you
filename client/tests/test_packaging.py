@@ -46,6 +46,7 @@ def test_optional_portable_release_contains_runtime_and_documentation(release_tr
     (previews / "client-dark-preview.png").write_bytes(b"preview fixture")
     (root / "docs").mkdir()
     (root / "docs" / "THIRD-PARTY-NOTICES.md").write_text("notices", encoding="utf-8")
+    (root / "LICENSE").write_text("project license", encoding="utf-8")
     package_release.package_client(include_portable=True)
     assert_checksums(root, [installer.name, "FocusLedger.exe", "FocusLedger-windows-x64.zip"])
     with zipfile.ZipFile(installer.parent / "FocusLedger-windows-x64.zip") as archive:
@@ -53,6 +54,7 @@ def test_optional_portable_release_contains_runtime_and_documentation(release_tr
         assert archive.read("FocusLedger/_internal/python312.dll") == b"runtime fixture"
         assert archive.read("README.md") == b"client instructions"
         assert archive.read("THIRD-PARTY-NOTICES.md") == b"notices"
+        assert archive.read("LICENSE") == b"project license"
         assert archive.read("docs/client-dark-preview.png") == b"preview fixture"
     assert (installer.parent / "FocusLedger.exe").read_bytes() == b"onefile fixture"
 
