@@ -251,6 +251,12 @@ docker save -o release/FocusLedger-server-linux-amd64.tar focusledger-server:202
 
 本项目发布工具还需要镜像元信息和校验文件，因此重新生成完整 ZIP 时请使用 `build_image.py`。只打包服务端时，在项目根目录执行 `python tools/package_release.py --server-only`；两端都构建完成后可执行 `python tools/package_release.py` 联合打包。
 
+## 时间显示与设备时钟
+
+服务端以 UTC 保存和交换时间，网页由浏览器换算为查看者本机时区，页脚显示当前时区；Windows 客户端列表同样按所在电脑的本机时区显示。同一条记录在不同时区设备上显示的本地时间可能不同。
+
+请同步采集设备的系统时钟。上传记录的时间超前超过 5 分钟时，服务端会拒绝请求并提示同步系统时钟；调整网页显示时区不能修复采集设备的错误时间。
+
 ## 网页主题
 
 网页默认跟随当前电脑或手机的系统深浅色，系统切换时自动更新。每个页面（包括登录页）右上角的主题按钮可选「跟随系统 / 浅色 / 深色」；窄屏上显示为半圆图标。手动选择立即生效，保存在当前浏览器中，刷新、重新登录和再次打开后仍有效，同一浏览器的其他标签页也会同步。不跨设备或与 Windows 客户端同步。
@@ -288,4 +294,4 @@ r7 的设备识别改为同账户内按名称匹配（去除首尾空白），�
 
 本机演示可在项目根目录运行 `python server/tools/demo_server.py`，访问 `http://127.0.0.1:8765`，管理员为 `demo`，密码为 `preview-only-123456`。该工具使用合成数据，会重建 `.runtime/demo` 中的演示数据库，不用于正式部署。
 
-本次发布验证与限制见根项目 `docs/VALIDATION.md`。Docker 导入命令的官方说明见 [docker image load](https://docs.docker.com/reference/cli/docker/image/load/)。
+历史验证摘要与未覆盖范围见[验证记录](https://github.com/Mikefuck/I-can-see-you/blob/main/docs/VALIDATION.md)。Docker 导入命令的官方说明见 [docker image load](https://docs.docker.com/reference/cli/docker/image/load/)。

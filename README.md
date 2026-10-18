@@ -4,7 +4,7 @@
 
 支持中文界面、深浅色主题、离线缓存与多用户。采集需要用户主动配置并开启；不采集窗口标题、截图、键盘输入、文件内容或进程完整路径。
 
-[Windows 使用说明](client/README.md) · [Android 使用说明](android/README.md) · [服务端部署](server/README.md) · [完整文档](docs/README.md) · [参与开发](#参与开发) · [安全说明](#安全说明)
+[Windows 使用说明](client/README.md) · [Android 使用说明](android/README.md) · [服务端部署](server/README.md) · [文档导航](docs/README.md) · [参与开发](#参与开发) · [安全说明](#安全说明)
 
 ## 功能
 
@@ -96,7 +96,7 @@ python -m venv .venv
 android/      Android 客户端、Gradle 构建、测试和预览
 client/       Windows 客户端、打包脚本、测试和预览
 server/       FastAPI 服务端、网页、Docker 配置和测试
-docs/         使用详解、协议入口、隐私与发布说明
+docs/         文档导航、隐私、发布、第三方组件与验证摘要
 tools/        开发依赖、联合打包与仓库发布前检查
 .github/      自动检查、反馈模板与贡献和安全说明入口
 ```
