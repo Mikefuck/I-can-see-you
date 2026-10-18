@@ -282,7 +282,7 @@ r7 的设备识别改为同账户内按名称匹配（去除首尾空白），�
 
 `app/` 包含接口、数据库、鉴权和网页；网页读模型在 `app/board.py`，模板在 `app/templates`，静态文件在 `app/static`。内容安全策略禁止内联脚本、内联样式和事件属性，脚本不用 `innerHTML`。协议见 [docs/API.md](docs/API.md)。
 
-在完整项目根目录安装 `requirements-dev.txt` 后，运行 `python -m pytest server/tests`；其中 `test_upload_integration.py` 验证真实 HTTP 客户端上传，需要两端依赖。
+在完整项目根目录安装 `tools/requirements-dev.txt` 后，运行 `python -m pytest server/tests`；其中 `test_upload_integration.py` 验证真实 HTTP 客户端上传，需要两端依赖。
 
 网页实时更新与时间轴交互测试使用 Node.js 内置测试工具：`node --test server/tests/realtime.test.cjs server/tests/timeline.test.cjs`。时间轴测试覆盖即时滚轮与作用区域、滑块锚点与复位、加减倍率、双指距离与中心点映射、单指横拖与纵向滚动、取消／抬指、平移边界、键盘及减少动态效果。
 

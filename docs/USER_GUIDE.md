@@ -49,11 +49,11 @@ server/                       Linux Docker 服务端
 ├── docs/                     API 协议与网页预览图片
 └── release/                  服务端发布包与校验文件
 docs/                         共用验证记录与第三方组件说明
-tools/package_release.py      联合打包工具
+tools/                        开发依赖、联合打包与仓库检查
 .runtime/                     本地开发环境与验证缓存
 ```
 
-客户端使用说明见 [client/README.md](../client/README.md)，服务端部署说明见 [server/README.md](../server/README.md)。两端源码、依赖、测试、工具和发布包分别归入对应目录，根目录的 `requirements-dev.txt` 与 `pytest.ini` 用于统一安装开发依赖和运行测试。
+客户端使用说明见 [client/README.md](../client/README.md)，服务端部署说明见 [server/README.md](../server/README.md)。两端源码、依赖、测试、工具和发布包分别归入对应目录；`tools/requirements-dev.txt` 用于统一安装开发依赖，根目录的 `pytest.ini` 配置测试目录和导入路径。开发与安全说明分别见 README 的[参与开发](../README.md#参与开发)和[安全说明](../README.md#安全说明)章节。
 
 ## 已实现
 
@@ -182,7 +182,7 @@ Get-FileHash client\release\FocusLedger-Setup-windows-x64.exe -Algorithm SHA256
 ## 验证
 
 ```powershell
-python -m pip install -r requirements-dev.txt
+python -m pip install -r tools/requirements-dev.txt
 python -m pytest
 ```
 

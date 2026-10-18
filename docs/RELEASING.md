@@ -27,7 +27,7 @@ git diff
 
 ## 验证与构建
 
-先按 [贡献指南](../CONTRIBUTING.md) 运行相关测试和仓库检查。完整 Python 测试在 Windows 运行；网页测试使用 Node.js；Android 使用 JDK 21。
+先按 [参与开发](../README.md#参与开发) 运行相关测试和仓库检查。完整 Python 测试在 Windows 运行；网页测试使用 Node.js；Android 使用 JDK 21。
 
 Windows，在项目根目录执行，构建机需安装 Inno Setup：
 

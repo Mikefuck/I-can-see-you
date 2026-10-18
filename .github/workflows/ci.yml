@@ -47,10 +47,10 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: |
-            requirements-dev.txt
+            tools/requirements-dev.txt
             client/requirements.txt
             server/requirements.txt
-      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pip install -r tools/requirements-dev.txt
       - run: python -m pytest
 
   server-image:

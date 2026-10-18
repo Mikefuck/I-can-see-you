@@ -132,7 +132,7 @@ def main():
                 problem = check_link(path, target, published)
                 if problem:
                     errors.append(f"{name}: {problem}")
-    for required in ("README.md", "LICENSE", "CONTRIBUTING.md", "SECURITY.md"):
+    for required in ("README.md", "LICENSE", ".github/CONTRIBUTING.md", ".github/SECURITY.md"):
         if required not in published:
             errors.append(f"{required}: missing from the source file list")
     if errors:

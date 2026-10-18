@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$JdkPath = '',
     [string]$SdkPath = '',
     [string]$TestTempPath = '',
@@ -79,7 +79,7 @@ if (!$SkipTests) {
     } finally { Pop-Location }
     if ($VerifyServer) {
         $testPython = Join-Path $repositoryRoot '.runtime\build-venv\Scripts\python.exe'
-        if (!(Test-Path -LiteralPath $testPython)) { throw '请先在 .runtime/build-venv 安装 requirements-dev.txt，以运行真实服务端联调。' }
+        if (!(Test-Path -LiteralPath $testPython)) { throw '请先在 .runtime/build-venv 安装 tools/requirements-dev.txt，以运行真实服务端联调。' }
         & $testPython (Join-Path $androidProject 'tools\verify_server.py') --java (Join-Path $JdkPath 'bin\java.exe') --classpath $classpath
         if ($LASTEXITCODE -ne 0) { throw 'Android 与真实服务端联调失败。' }
     }

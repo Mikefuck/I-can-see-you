@@ -161,4 +161,4 @@ Get-FileHash .\release\FocusLedger-Setup-windows-x64.exe -Algorithm SHA256
 - `build-installer.ps1`、`installer/`：Windows 安装包构建脚本、安装 / 卸载规则与中文向导。
 - `docs/`：客户端预览图片。
 
-在项目根目录安装 `requirements-dev.txt` 后，执行 `python -m pytest client/tests`。预览命令为 `python client/tools/preview_client.py`。
+在项目根目录安装 `tools/requirements-dev.txt` 后，执行 `python -m pytest client/tests`。预览命令为 `python client/tools/preview_client.py`。
