@@ -79,6 +79,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: 'platform-tools'
       - uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2 # v5
       - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - run: sh ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
