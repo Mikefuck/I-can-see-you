@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 from uuid import uuid4
 
 import pytest
@@ -612,6 +613,26 @@ def test_static_assets_are_served_and_revalidated(client):
     # Anything behind a login, and the login page itself, is never stored.
     assert client.get("/login").headers["Cache-Control"] == "no-store"
     assert client.get("/api/web/board").headers["Cache-Control"] == "no-store"
+
+
+@pytest.mark.parametrize("backend_url, browser_url", [
+    ("http://ledger.example:8077", "http://ledger.example:8077"),
+    ("https://look.example:16699", "https://look.example:16699"),
+    # TLS terminates at the proxy; the backend still sees HTTP, possibly an internal host.
+    ("http://look.example:16699", "https://look.example:16699"),
+    ("http://192.168.1.10:8080", "https://look.example:16699"),
+])
+def test_page_assets_follow_browser_origin_behind_reverse_proxy(client, backend_url, browser_url):
+    assets = {"mark.svg", "theme.js", "style.css", "realtime.js", "timeline.js", "app.js"}
+    for page_path in ("/", "/login", "/nowhere"):
+        response = client.get(backend_url + page_path, headers={"accept": "text/html"})
+        links = re.findall(r'<(?:script|link)\b[^>]*\b(?:src|href)="([^"]+)"', response.text)
+        assert set(links) == {"/static/" + name for name in assets}
+        for link in links:
+            resolved = urlsplit(urljoin(browser_url + page_path, link))
+            origin = urlsplit(browser_url)
+            assert (resolved.scheme, resolved.netloc) == (origin.scheme, origin.netloc)
+            assert client.get(resolved.path).status_code == 200
 
 
 def test_timeline_navigation_is_loaded_before_the_timetable_on_both_pages(authorized):

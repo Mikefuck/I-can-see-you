@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-IMAGE = "focusledger-server:2026.10.18-r17"
+IMAGE = "focusledger-server:2026.10.22-r18"
 ARCHIVE = "FocusLedger-server-linux-amd64.tar"
 
 

@@ -1,6 +1,6 @@
 # GitHub 与版本发布指南
 
-源码通过 Git 仓库分发；安装包、APK、ZIP 和 Docker TAR 通过 GitHub Releases 附件分发。当前三个组件独立编号：Windows `0.3.1`、Android `0.1.6`、服务端 `2026.10.18-r17`。
+源码通过 Git 仓库分发；安装包、APK、ZIP 和 Docker TAR 通过 GitHub Releases 附件分发。当前三个组件独立编号：Windows `0.3.1`、Android `0.1.6`、服务端 `2026.10.22-r18`。
 
 ## 发布前检查
 
